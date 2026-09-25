@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>主页 · 蓝云网盘</title>
+<meta name="description" content="蓝云网盘 BCD —— 基于 Cloudflare Worker + D1 的轻量网盘分享系统">
+<link rel="icon" href="/img/logo.svg">
+<link rel="stylesheet" href="/css/style.css">
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('bcd-theme') || 'system';
+      var d = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.dataset.theme = d ? 'dark' : 'light';
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+
+<main class="hero">
+  <div class="hero-banner"><img src="/img/background.png" alt="蓝云网盘"></div>
+  <div class="hero-card">
+    <img class="logo" src="/img/logo.svg" alt="蓝云网盘">
+    <h1 id="siteName">蓝云网盘</h1>
+    <p class="desc" id="siteDesc">主页内容建设中…… 你可以先前往「所有文件」浏览或下载已分享的文件。</p>
+    <div class="hero-actions">
+      <a class="btn primary" href="/files">进入所有文件</a>
+      <a class="btn" href="/admin" id="adminEntry">管理员登录</a>
+    </div>
+    <div class="hero-foot" id="heroFoot">BlueCloudDrive · 基于 Cloudflare Worker + D1</div>
+  </div>
+</main>
+
+<script src="/js/common.js"></script>
+<script>
+  (async function () {
+    const site = await BCD.boot({ active: 'home', title: '主页' });
+    document.querySelector('#siteName').textContent = site.siteName || '蓝云网盘';
+    document.querySelector('#adminEntry').textContent = site.isAdmin ? '进入管理后台' : '管理员登录';
+    document.querySelector('#heroFoot').textContent =
+      'BlueCloudDrive v' + (site.version || '') + ' · 基于 Cloudflare Worker + D1' +
+      (site.isAdmin ? ' · 已登录：' + (site.admin.displayName || site.admin.username) : '');
+  })();
+</script>
+</body>
+</html>

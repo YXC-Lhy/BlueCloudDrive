@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+  <!-- 文件夹底色 -->
+  <rect x="4" y="12" width="40" height="32" rx="4" ry="4" fill="#FFD666"/>
+  <path d="M4 12 H16 L20 18 H44 V40 H4 Z" fill="#FFC107"/>
+
+  <!-- 拉链 -->
+  <!-- 拉链主干 -->
+  <rect x="32" y="18" width="4" height="22" fill="#999"/>
+  <!-- 拉链齿 -->
+  <rect x="32" y="18" width="4" height="2" fill="#FFF"/>
+  <rect x="32" y="22" width="4" height="2" fill="#FFF"/>
+  <rect x="32" y="26" width="4" height="2" fill="#FFF"/>
+  <rect x="32" y="30" width="4" height="2" fill="#FFF"/>
+  <rect x="32" y="34" width="4" height="2" fill="#FFF"/>
+  <rect x="32" y="38" width="4" height="2" fill="#FFF"/>
+</svg>

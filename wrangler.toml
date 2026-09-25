@@ -1,0 +1,16 @@
+# 用 wrangler 部署为 Workers + 静态资源时的配置（Pages 直接上传 zip 时不需要本文件）
+#   wrangler d1 create bcd        ← 把返回的 database_id 填到下面
+#   wrangler deploy
+name = "blueclouddrive"
+main = "_worker.js"
+compatibility_date = "2024-11-01"
+
+# 静态资源目录就是项目根目录，.assetsignore 已排除 _worker.js / _test / 文档等
+[assets]
+directory = "."
+binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"                 # 必须是 DB，后端固定读取 env.DB
+database_name = "bcd"
+database_id = "请替换为你的 D1 数据库 ID"

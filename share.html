@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>文件分享 · 蓝云网盘</title>
+<link rel="icon" href="/img/logo.svg">
+<link rel="stylesheet" href="/css/style.css">
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('bcd-theme') || 'system';
+      var d = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.dataset.theme = d ? 'dark' : 'light';
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+<main class="main"><div id="shareRoot" style="max-width:900px;margin:0 auto">
+  <div class="card"><div class="empty">加载中…</div></div>
+</div></main>
+<script src="/js/common.js"></script>
+<script src="/js/share.js"></script>
+</body>
+</html>

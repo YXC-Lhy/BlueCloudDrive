@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>所有文件 · 蓝云网盘</title>
+<link rel="icon" href="/img/logo.svg">
+<link rel="stylesheet" href="/css/style.css">
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('bcd-theme') || 'system';
+      var d = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.dataset.theme = d ? 'dark' : 'light';
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+
+<main class="main" style="max-width:1280px;margin:0 auto">
+  <div class="page-head">
+    <h2 id="pageTitle">所有文件</h2>
+    <span class="sub" id="pageSub">右键文件或文件夹查看更多操作</span>
+    <div class="spacer" style="flex:1"></div>
+    <span class="badge" id="visitorBadge">加载中…</span>
+  </div>
+
+  <div class="toolbar">
+    <button class="btn sm" id="btnUp" title="返回上一级">↑ 上一级</button>
+    <button class="btn sm" id="btnRefresh" title="刷新">刷新</button>
+    <div class="search-box" id="searchBox">
+      <input class="input" id="searchInput" placeholder="搜索文件（回车）" autocomplete="off">
+    </div>
+    <select class="select" id="sortSelect" style="width:auto">
+      <option value="name:asc">名称 ↑</option>
+      <option value="name:desc">名称 ↓</option>
+      <option value="time:desc">时间（新→旧）</option>
+      <option value="time:asc">时间（旧→新）</option>
+      <option value="size:desc">大小（大→小）</option>
+      <option value="size:asc">大小（小→大）</option>
+      <option value="type:asc">类型</option>
+      <option value="downloads:desc">下载次数</option>
+    </select>
+    <button class="btn sm" id="btnView" title="切换显示方式">列表视图</button>
+    <button class="btn sm" id="btnNewFolder" style="display:none">新建文件夹</button>
+    <div class="spacer" style="flex:1"></div>
+    <span class="muted" id="countInfo"></span>
+  </div>
+
+  <nav class="breadcrumb" id="breadcrumb"></nav>
+  <div id="content"></div>
+</main>
+
+<script src="/js/common.js"></script>
+<script src="/js/fileform.js"></script>
+<script src="/js/files.js"></script>
+</body>
+</html>

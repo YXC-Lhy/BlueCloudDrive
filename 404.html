@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>页面不存在 · 蓝云网盘</title>
+<link rel="icon" href="/img/logo.svg">
+<link rel="stylesheet" href="/css/style.css">
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem('bcd-theme') || 'system';
+      var d = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.dataset.theme = d ? 'dark' : 'light';
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+<header class="topbar" id="topbar"></header>
+<main class="main">
+  <div class="card" style="max-width:640px;margin:40px auto">
+    <div class="empty">
+      <img src="/img/icon/simple.svg" alt="">
+      <h2 style="font-size:18px;margin-bottom:8px">404 · 页面不存在</h2>
+      <div>你访问的页面找不到了，可能链接已失效或被删除。</div>
+      <div class="mt16"><a class="btn primary" href="/">返回主页</a> <a class="btn" href="/files">浏览所有文件</a></div>
+    </div>
+  </div>
+</main>
+<script src="/js/common.js"></script>
+<script>BCD.boot({ active: '', title: '404' });</script>
+</body>
+</html>

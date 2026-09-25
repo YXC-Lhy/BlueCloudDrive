@@ -1,0 +1,14 @@
+<svg width="48" height="48" xmlns="http://www.w3.org/2000/svg">
+ <!-- 蓝色圆角背景 -->
+
+ <!-- 白色云朵，用圆拼 -->
+ <g>
+  <title>Layer 1</title>
+  <rect x="-0.0813" id="svg_1" fill="#409EFF" ry="12" rx="12" height="48" width="48"/>
+  <circle stroke="null" id="svg_2" fill="white" r="9.21951" cy="27.6748" cx="24.55284"/>
+  <circle id="svg_3" fill="white" r="8" cy="28.73171" cx="33.28455"/>
+  <circle stroke="null" id="svg_4" fill="white" r="6.21138" cy="19.64228" cx="20.17886"/>
+  <circle id="svg_5" fill="white" r="8" cy="28.65041" cx="15.07317"/>
+  <circle stroke="null" id="svg_6" fill="white" r="6.98374" cy="17.89431" cx="30.70732"/>
+ </g>
+</svg>
