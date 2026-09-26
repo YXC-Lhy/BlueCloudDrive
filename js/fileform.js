@@ -11,6 +11,7 @@
     const mult = { B: 1, KB: 1024, MB: 1024 * 1024, GB: 1024 * 1024 * 1024 }[unit];
     return Math.round(v * mult);
   }
+
   function splitSize(bytes) {
     if (bytes === null || bytes === undefined) return { unit: 'unknown', value: '' };
     const units = ['GB', 'MB', 'KB', 'B'];
@@ -58,8 +59,11 @@
 
       <div class="form-row">
         <label>文件路径（文件在全文件浏览界面中的位置）<span style="color:var(--danger)">*</span></label>
-        <input class="input" name="folder" autocomplete="off" placeholder="/文件分享" value="${esc(file ? file.folder : o.defaultFolder || '/文件分享')}">
-        <div class="hint">默认 /文件分享；填写其它路径会自动创建对应文件夹，例如 /文件分享/电影/2024</div>
+        <div class="field-with-btn">
+          <input class="input" name="folder" autocomplete="off" placeholder="/文件分享" value="${esc(file ? file.folder : o.defaultFolder || '/文件分享')}">
+          <button class="btn" type="button" id="browseFolder" title="浏览并选择文件夹">浏览…</button>
+        </div>
+        <div class="hint">默认 /文件分享；填写其它路径会自动创建对应文件夹，也可以点「浏览…」选择已有文件夹</div>
         <div class="field-error" data-err="folder"></div>
       </div>
 
@@ -172,6 +176,17 @@
       });
     }
 
+    // 浏览并选择文件夹
+    body.querySelector('#browseFolder').addEventListener('click', async () => {
+      const picked = await BCD.folderPicker({
+        initialPath: body.querySelector('[name=folder]').value.trim() || '/文件分享',
+      });
+      if (picked) {
+        body.querySelector('[name=folder]').value = picked;
+        BCD.fieldErr(body, 'folder', '');
+      }
+    });
+
     const modal = BCD.modal({
       title: isEdit ? '编辑文件分享' : '新增文件分享',
       wide: true,
@@ -241,5 +256,171 @@
       ],
     });
     return modal;
+  };
+
+  /* ==========================================================================
+     文件夹选择弹窗：浏览全部文件，选中文件夹后填入路径
+       - 仅有「新建文件夹」按钮 + 右键空文件夹出现「删除」
+       - 单击选中，再次单击或双击进入
+     ========================================================================== */
+  BCD.folderPicker = function (opts) {
+    const o = opts || {};
+    let selected = o.initialPath || '/';
+
+    const body = document.createElement('div');
+    body.innerHTML = `
+      <div class="toolbar" style="margin-bottom:10px">
+        <button class="btn sm" type="button" id="fpUp">↑ 上一级</button>
+        <button class="btn sm" type="button" id="fpRefresh">刷新</button>
+        <button class="btn sm primary" type="button" id="fpNew">新建文件夹</button>
+        <div style="flex:1"></div>
+        <span class="muted" id="fpCount"></span>
+      </div>
+      <nav class="breadcrumb" id="fpCrumb"></nav>
+      <div id="fpList" class="file-list fp-list"><div class="empty">加载中…</div></div>
+      <div class="hint">单击选中文件夹，再次单击或双击进入；右键空文件夹可删除</div>
+      <div class="fp-selected">已选择：<b id="fpSel">/</b></div>`;
+
+    const listEl = body.querySelector('#fpList');
+    const crumbEl = body.querySelector('#fpCrumb');
+    const countEl = body.querySelector('#fpCount');
+    const selEl = body.querySelector('#fpSel');
+    let data = null;
+
+    function paintSelected() {
+      selEl.textContent = selected;
+      listEl.querySelectorAll('.file-row').forEach((row) => {
+        row.classList.toggle('selected', row.dataset.folder === selected);
+      });
+    }
+
+    function setSelected(p) {
+      selected = p;
+      paintSelected();
+    }
+
+    async function load(p) {
+      listEl.innerHTML = '<div class="empty">加载中…</div>';
+      try {
+        data = await BCD.api('/api/files/list?path=' + encodeURIComponent(p || '/') + '&sort=name&order=asc');
+      } catch (e) {
+        listEl.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+        return;
+      }
+      render();
+    }
+
+    function render() {
+      // 面包屑
+      crumbEl.innerHTML = (data.breadcrumb || [])
+        .map((c, i, arr) => {
+          const last = i === arr.length - 1;
+          return `<span class="crumb ${last ? 'current' : ''}" data-path="${esc(c.path)}">${esc(c.name)}</span>${last ? '' : '<span class="sep">/</span>'}`;
+        })
+        .join('');
+      crumbEl.querySelectorAll('.crumb').forEach((c) => c.addEventListener('click', () => load(c.dataset.path)));
+
+      const folders = data.folders || [];
+      const files = data.files || [];
+      countEl.textContent = `${folders.length} 个文件夹 · ${files.length} 个文件`;
+
+      const rows = [];
+      folders.forEach((f) => {
+        const meta = f.empty ? '空文件夹' : `${f.subCount} 个子文件夹 · ${f.fileCount} 个文件`;
+        rows.push(`<div class="file-row" data-folder="${esc(f.path)}">
+            <img src="/img/icon/folder.svg" alt="">
+            <div class="fr-main">
+              <div class="fr-name">${esc(f.name)}</div>
+              <div class="fr-sub"><span>${esc(meta)}</span></div>
+            </div>
+            <div class="fr-actions"><span class="badge ${f.empty ? '' : 'ok'}">${f.empty ? '空' : '有内容'}</span></div>
+          </div>`);
+      });
+      files.forEach((f) => {
+        rows.push(`<div class="file-row" style="opacity:.55;cursor:default">
+            <img src="${BCD.iconFor(f.name)}" alt="">
+            <div class="fr-main">
+              <div class="fr-name">${esc(f.name)}</div>
+              <div class="fr-sub"><span>${esc(f.sizeText)}</span><span>${esc(f.createdAt)}</span></div>
+            </div>
+          </div>`);
+      });
+      listEl.innerHTML = rows.length ? rows.join('') : '<div class="empty">该目录下还没有文件夹</div>';
+
+      listEl.querySelectorAll('[data-folder]').forEach((row) => {
+        const path = row.dataset.folder;
+        const folder = folders.find((x) => x.path === path);
+        row.addEventListener('click', () => {
+          if (selected === path) load(path); // 再次单击 = 进入
+          else setSelected(path);
+        });
+        row.addEventListener('dblclick', () => load(path));
+        row.addEventListener('contextmenu', (ev) => {
+          setSelected(path);
+          BCD.contextMenu(ev, [
+            folder && folder.empty
+              ? {
+                  label: '删除文件夹',
+                  danger: true,
+                  onClick: async () => {
+                    const ok = await BCD.confirmDlg('删除文件夹', `确定删除空文件夹「${folder.name}」吗？`, { danger: true, okText: '删除' });
+                    if (!ok) return;
+                    try {
+                      await BCD.api('/api/admin/folders/' + encodeURIComponent(folder.shareId), { method: 'DELETE' });
+                      BCD.toastOk('已删除');
+                      if (selected === path) setSelected(data.path);
+                      load(data.path);
+                    } catch (e) {
+                      BCD.toastErr(e.message);
+                    }
+                  },
+                }
+              : { label: '删除文件夹（文件夹非空）', disabled: true },
+            { label: '进入该文件夹', onClick: () => load(path) },
+          ]);
+        });
+      });
+      paintSelected();
+    }
+
+    async function createFolder() {
+      const base = data ? data.path : '/';
+      const name = await BCD.promptDlg('新建文件夹', {
+        label: '文件夹名称',
+        placeholder: '例如 电影',
+        hint: `将在 ${base} 下创建`,
+        okText: '创建',
+      });
+      if (name === null || !name.trim()) return;
+      const full = (base === '/' ? '' : base) + '/' + name.trim();
+      try {
+        await BCD.api('/api/admin/folders', { method: 'POST', body: { path: full } });
+        BCD.toastOk('文件夹已创建');
+        setSelected(full);
+        load(base);
+      } catch (e) {
+        BCD.toastErr(e.message);
+      }
+    }
+
+    body.querySelector('#fpUp').addEventListener('click', () => {
+      if (data && data.parent) load(data.parent);
+    });
+    body.querySelector('#fpRefresh').addEventListener('click', () => load(data ? data.path : '/'));
+    body.querySelector('#fpNew').addEventListener('click', createFolder);
+
+    return new Promise((resolve) => {
+      BCD.modal({
+        title: o.title || '选择文件夹',
+        wide: true,
+        body,
+        buttons: [
+          { text: '取消', onClick: ({ close }) => close(null) },
+          { text: '选择此文件夹', type: 'primary', onClick: ({ close }) => close(selected) },
+        ],
+        onClose: (result) => resolve(result === undefined ? null : result),
+      });
+      load(selected);
+    });
   };
 })();

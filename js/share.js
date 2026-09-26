@@ -263,7 +263,7 @@
 
   /* ------------------------------ 启动 ------------------------------ */
   (async function () {
-    await BCD.boot({ active: 'files', title: '文件分享' });
+    await BCD.boot({ minimal: true, title: '文件分享' });
     if (!m) return fail('分享链接格式不正确');
     const shareId = m[2];
     if (m[1] === 's') renderFile(shareId);

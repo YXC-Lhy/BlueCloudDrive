@@ -9,13 +9,17 @@
  * ============================================================================
  */
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
+const REPO_URL = 'https://github.com/YXC-Lhy/BlueCloudDrive';
 const COOKIE_NAME = 'bcd_token';
 const SESSION_DAYS = 7;
 
 /* ------------------------------ 默认配置 ------------------------------ */
+const HOME_TEXT_DEFAULT = '主页内容建设中…… 你可以先前往「所有文件」浏览或下载已分享的文件。';
 const DEFAULT_SETTINGS = {
   site_name: '蓝云网盘',
+  home_desc: HOME_TEXT_DEFAULT, // 主页简介（纯文本）
+  home_notice: HOME_TEXT_DEFAULT, // 主页公告（Markdown，留空则不显示）
   guest_browse: '1', // 全部文件浏览界面是否对访客开放
   guest_root: '/文件分享', // 访客根目录
   allow_search: '1', // 是否允许搜索
@@ -502,7 +506,7 @@ function serializeFile(row, linkCount) {
 }
 
 function serializeFolder(row) {
-  return {
+  const out = {
     id: Number(row.id),
     name: row.name,
     path: row.path,
@@ -510,6 +514,12 @@ function serializeFolder(row) {
     shareId: row.share_id,
     createdAt: row.created_at,
   };
+  if (row.sub_count !== undefined && row.sub_count !== null) {
+    out.subCount = Number(row.sub_count);
+    out.fileCount = Number(row.file_count || 0);
+    out.empty = out.subCount === 0 && out.fileCount === 0;
+  }
+  return out;
 }
 
 function serializeLink(row) {
@@ -610,7 +620,10 @@ async function handleApi(request, env, url) {
     const admin = await currentAdmin(request, env);
     return ok({
       version: VERSION,
+      repoUrl: REPO_URL,
       siteName: s.site_name || DEFAULT_SETTINGS.site_name,
+      homeDesc: s.home_desc === undefined ? DEFAULT_SETTINGS.home_desc : s.home_desc,
+      homeNotice: s.home_notice === undefined ? DEFAULT_SETTINGS.home_notice : s.home_notice,
       guestBrowse: s.guest_browse === '1',
       guestRoot: s.guest_root || DEFAULT_SETTINGS.guest_root,
       allowSearch: s.allow_search === '1',
@@ -696,6 +709,10 @@ async function handleApi(request, env, url) {
     const s = await getSettings(env);
     return ok({
       siteName: s.site_name || DEFAULT_SETTINGS.site_name,
+      version: VERSION,
+      repoUrl: REPO_URL,
+      homeDesc: s.home_desc === undefined ? DEFAULT_SETTINGS.home_desc : s.home_desc,
+      homeNotice: s.home_notice === undefined ? DEFAULT_SETTINGS.home_notice : s.home_notice,
       guestBrowse: s.guest_browse === '1',
       guestRoot: s.guest_root,
       allowSearch: s.allow_search === '1',
@@ -725,6 +742,16 @@ async function handleApi(request, env, url) {
       if (r.error) fields.guestRoot = r.error;
       else put('guest_root', r.value);
     }
+    if (body.homeDesc !== undefined) {
+      const v = String(body.homeDesc).trim();
+      if ([...v].length > 200) fields.homeDesc = '主页简介不能超过 200 个字符';
+      else put('home_desc', v);
+    }
+    if (body.homeNotice !== undefined) {
+      const v = String(body.homeNotice);
+      if ([...v].length > 5000) fields.homeNotice = '公告内容不能超过 5000 个字符';
+      else put('home_notice', v);
+    }
     if (body.guestBrowse !== undefined) put('guest_browse', body.guestBrowse ? '1' : '0');
     if (body.allowSearch !== undefined) put('allow_search', body.allowSearch ? '1' : '0');
     if (body.countDownload !== undefined) put('count_download', body.countDownload ? '1' : '0');
@@ -734,7 +761,16 @@ async function handleApi(request, env, url) {
     await db(env).batch(updates);
     await logAction(env, admin.username, 'update_settings', 'global', JSON.stringify(body).slice(0, 300), request);
     const s = await getSettings(env);
-    return ok({ siteName: s.site_name || DEFAULT_SETTINGS.site_name, guestBrowse: s.guest_browse === '1', guestRoot: s.guest_root, allowSearch: s.allow_search === '1', countDownload: s.count_download === '1' });
+    return ok({
+      siteName: s.site_name || DEFAULT_SETTINGS.site_name,
+      version: VERSION,
+      homeDesc: s.home_desc === undefined ? DEFAULT_SETTINGS.home_desc : s.home_desc,
+      homeNotice: s.home_notice === undefined ? DEFAULT_SETTINGS.home_notice : s.home_notice,
+      guestBrowse: s.guest_browse === '1',
+      guestRoot: s.guest_root,
+      allowSearch: s.allow_search === '1',
+      countDownload: s.count_download === '1',
+    });
   }
 
   /* ---------- 管理员账号管理 ---------- */
@@ -895,12 +931,23 @@ async function handleApi(request, env, url) {
       const res = await db(env).prepare(`${fSql} ORDER BY ${orderSql} LIMIT ? OFFSET ?`).bind(like, ...scopeBinds, pageSize, (page - 1) * pageSize).all();
       files = ((res && res.results) || []).map((r) => serializeFile(r, r.link_count));
       const fRes = await db(env)
-        .prepare(`SELECT * FROM bcd_folders WHERE name LIKE ? ESCAPE '\\'${root === '/' ? '' : ` AND (path = ? OR path LIKE ?)`} ORDER BY name COLLATE NOCASE ASC LIMIT 200`)
+        .prepare(
+          `SELECT f.*, (SELECT COUNT(*) FROM bcd_folders c WHERE c.parent=f.path) AS sub_count,
+                  (SELECT COUNT(*) FROM bcd_files x WHERE x.folder=f.path) AS file_count
+           FROM bcd_folders f WHERE f.name LIKE ? ESCAPE '\\'${root === '/' ? '' : ` AND (f.path = ? OR f.path LIKE ?)`} ORDER BY f.name COLLATE NOCASE ASC LIMIT 200`
+        )
         .bind(like, ...scopeBinds)
         .all();
       folders = ((fRes && fRes.results) || []).map(serializeFolder);
     } else {
-      const fRes = await db(env).prepare('SELECT * FROM bcd_folders WHERE parent=? ORDER BY name COLLATE NOCASE ASC').bind(cur).all();
+      const fRes = await db(env)
+        .prepare(
+          `SELECT f.*, (SELECT COUNT(*) FROM bcd_folders c WHERE c.parent=f.path) AS sub_count,
+                  (SELECT COUNT(*) FROM bcd_files x WHERE x.folder=f.path) AS file_count
+           FROM bcd_folders f WHERE f.parent=? ORDER BY f.name COLLATE NOCASE ASC`
+        )
+        .bind(cur)
+        .all();
       folders = ((fRes && fRes.results) || []).map(serializeFolder);
       const cnt = await db(env).prepare('SELECT COUNT(*) AS c FROM bcd_files WHERE folder=?').bind(cur).first();
       total = Number(cnt.c);

@@ -9,6 +9,8 @@
 
   let site = null;
   let settings = null;
+  const HOME_TEXT_DEFAULT = '主页内容建设中…… 你可以先前往「所有文件」浏览或下载已分享的文件。';
+  const REPO_URL = 'https://github.com/YXC-Lhy/BlueCloudDrive';
   const fileState = { search: '', sort: 'time', order: 'desc', page: 1, pageSize: 60, total: 0, loaded: [] };
   const SECS = ['settings', 'account', 'files', 'backup'];
 
@@ -79,25 +81,106 @@
       return BCD.toastErr(e.message);
     }
     $('#setSiteName').value = settings.siteName || '蓝云网盘';
+    $('#setHomeDesc').value = settings.homeDesc === undefined ? HOME_TEXT_DEFAULT : settings.homeDesc;
+    $('#setHomeNotice').value = settings.homeNotice === undefined ? HOME_TEXT_DEFAULT : settings.homeNotice;
     $('#setGuestRoot').value = settings.guestRoot || '/文件分享';
     $('#setGuestBrowse').checked = !!settings.guestBrowse;
     $('#setAllowSearch').checked = !!settings.allowSearch;
     $('#setCountDownload').checked = !!settings.countDownload;
+    renderSysInfo();
+  }
+
+  function renderSysInfo() {
+    const ver = (site && site.version) || (settings && settings.version) || '';
+    const repo = (site && site.repoUrl) || REPO_URL;
     const rows = [
-      ['程序版本', 'BlueCloudDrive v' + (site.version || '')],
+      ['程序版本', esc('BlueCloudDrive v' + ver)],
       ['数据存储', 'Cloudflare D1（表前缀 bcd_，首次启动自动建表）'],
-      ['初始化时间（北京时间）', settings.initializedAt || '—'],
-      ['管理员账号数', settings.adminCount],
-      ['分享文件总数', settings.fileCount],
-      ['当前登录', `${site.admin.username}（${site.admin.role === 'total' ? '总管理员' : '子管理员'}）`],
+      ['初始化时间（北京时间）', esc((settings && settings.initializedAt) || '—')],
+      ['管理员账号数', esc(settings ? settings.adminCount : '—')],
+      ['分享文件总数', esc(settings ? settings.fileCount : '—')],
+      ['当前登录', `${esc(site.admin.username)}（${site.admin.role === 'total' ? '总管理员' : '子管理员'}）`],
     ];
-    $('#sysInfo').innerHTML = rows.map((r) => `<tr><th style="width:220px">${esc(r[0])}</th><td>${esc(r[1])}</td></tr>`).join('');
+    $('#sysInfo').innerHTML =
+      rows.map((r) => `<tr><th style="width:220px">${esc(r[0])}</th><td>${r[1]}</td></tr>`).join('') +
+      `<tr><th>项目地址</th><td><a href="${esc(repo)}" target="_blank" rel="noopener noreferrer">${esc(repo)}</a></td></tr>
+       <tr><th>版本更新</th><td>
+         <button class="btn sm" id="btnCheckUpdate">检查更新</button>
+         <span class="muted" id="updateHint" style="margin-left:8px">当前版本 v${esc(ver)}</span>
+       </td></tr>`;
+    $('#btnCheckUpdate').addEventListener('click', checkUpdate);
+  }
+
+  /** 检查 GitHub Release（只请求一次，失败不重试） */
+  async function checkUpdate() {
+    const btn = $('#btnCheckUpdate');
+    if (!btn || btn.disabled) return;
+    const hint = $('#updateHint');
+    const origin = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '检查中…';
+    if (hint) hint.textContent = '';
+    try {
+      const res = await fetch('https://api.github.com/repos/YXC-Lhy/BlueCloudDrive/releases/latest', {
+        headers: { Accept: 'application/vnd.github+json' },
+        cache: 'no-store',
+      });
+      if (res.status === 404) throw new Error('仓库暂时没有发布 Release');
+      if (!res.ok) throw new Error('GitHub 返回 HTTP ' + res.status);
+      const data = await res.json();
+      const latest = String(data.tag_name || data.name || '').trim();
+      const cur = (site && site.version) || '';
+      if (!latest) throw new Error('返回数据中没有版本号');
+      if (BCD.compareVersion(latest.replace(/^v/i, ''), cur) <= 0) {
+        btn.textContent = '已是最新版本';
+        btn.disabled = true; // 已是最新则不再允许点击
+        if (hint) hint.textContent = '当前 v' + cur + '，已是最新版本';
+        BCD.toastOk('当前已是最新版本 v' + cur);
+        return;
+      }
+      btn.disabled = false;
+      btn.textContent = origin;
+      if (hint) hint.textContent = '发现新版本 ' + latest;
+      BCD.modal({
+        title: '发现新版本 ' + latest,
+        wide: true,
+        body: `<div class="form-row" style="max-width:none;margin-bottom:0">
+            <div class="flex" style="justify-content:space-between">
+              <span>当前版本：<b>v${esc(cur)}</b></span>
+              <span>最新版本：<b style="color:var(--primary)">${esc(latest)}</b></span>
+            </div>
+            <div class="hint" style="margin-bottom:10px">发布时间：${esc(data.published_at ? new Date(data.published_at).toLocaleString('zh-CN') : '—')}</div>
+            <div class="md-body" id="releaseBody"></div>
+          </div>`,
+        onMount: ({ body }) => {
+          body.querySelector('#releaseBody').innerHTML = BCD.markdown(data.body || '（该版本没有填写更新说明）');
+        },
+        buttons: [
+          { text: '稍后再说' },
+          {
+            text: '前往下载页',
+            type: 'primary',
+            onClick: ({ close }) => {
+              window.open(data.html_url || REPO_URL + '/releases', '_blank', 'noopener');
+              close(null);
+            },
+          },
+        ],
+      });
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = origin;
+      if (hint) hint.textContent = '检查失败，可稍后手动重试';
+      BCD.toastErr('检查更新失败：' + e.message);
+    }
   }
 
   async function saveSettings() {
     BCD.clearFieldErrors($('#sec-settings'));
     const payload = {
       siteName: $('#setSiteName').value.trim(),
+      homeDesc: $('#setHomeDesc').value.trim(),
+      homeNotice: $('#setHomeNotice').value,
       guestRoot: $('#setGuestRoot').value.trim(),
       guestBrowse: $('#setGuestBrowse').checked,
       allowSearch: $('#setAllowSearch').checked,
@@ -106,6 +189,8 @@
     const fe = {};
     if (!payload.siteName) fe.siteName = '站点名称不能为空';
     if (!payload.guestRoot) fe.guestRoot = '访客根目录不能为空';
+    if ([...payload.homeDesc].length > 200) fe.homeDesc = '主页简介不能超过 200 个字符';
+    if ([...payload.homeNotice].length > 5000) fe.homeNotice = '公告内容不能超过 5000 个字符';
     if (Object.keys(fe).length) return BCD.applyFieldErrors($('#sec-settings'), fe);
     try {
       await BCD.api('/api/admin/settings', { method: 'PUT', body: payload });
@@ -491,6 +576,25 @@
     });
     $('#btnSaveSettings').addEventListener('click', saveSettings);
     $('#btnReloadSettings').addEventListener('click', loadSettings);
+    $('#btnPreviewNotice').addEventListener('click', () => {
+      const text = $('#setHomeNotice').value.trim();
+      BCD.modal({
+        title: '公告预览',
+        wide: true,
+        body: text
+          ? '<div class="md-body" id="previewBody"></div>'
+          : '<div class="muted">公告内容为空，主页将不显示公告模块。</div>',
+        onMount: ({ body }) => {
+          const box = body.querySelector('#previewBody');
+          if (box) box.innerHTML = BCD.markdown(text);
+        },
+        buttons: [{ text: '关闭' }],
+      });
+    });
+    $('#btnResetNotice').addEventListener('click', () => {
+      $('#setHomeNotice').value = HOME_TEXT_DEFAULT;
+      BCD.toast('已填入默认公告文案，记得点击「保存设置」', 'ok');
+    });
     $('#btnSaveMe').addEventListener('click', saveMe);
     $('#btnLogout').addEventListener('click', async () => {
       try {

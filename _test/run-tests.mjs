@@ -428,6 +428,46 @@ section('站点名称兜底');
   env.DB.raw.prepare("UPDATE bcd_settings SET value='蓝云网盘' WHERE key='site_name'").run();
 }
 
+section('主页简介 / 公告设置');
+const HOME_DEFAULT = '主页内容建设中…… 你可以先前往「所有文件」浏览或下载已分享的文件。';
+{
+  const s = await call('GET', '/api/site');
+  check('默认简介为指定文案', s.data?.data?.homeDesc === HOME_DEFAULT, JSON.stringify(s.data?.data?.homeDesc));
+  check('默认公告与简介一致', s.data?.data?.homeNotice === HOME_DEFAULT);
+  check('版本号为 1.0.1', s.data?.data?.version === '1.0.1', s.data?.data?.version);
+  check('返回仓库地址', /github\.com\/YXC-Lhy\/BlueCloudDrive/.test(s.data?.data?.repoUrl || ''), s.data?.data?.repoUrl);
+
+  const tooLong = await call('PUT', '/api/admin/settings', { cookie: adminCookie, body: { homeNotice: 'x'.repeat(5001) } });
+  check('公告超长被驳回', tooLong.status === 400 && !!tooLong.data?.error?.fields?.homeNotice);
+  const descLong = await call('PUT', '/api/admin/settings', { cookie: adminCookie, body: { homeDesc: 'x'.repeat(201) } });
+  check('简介超长被驳回', descLong.status === 400 && !!descLong.data?.error?.fields?.homeDesc);
+
+  const set = await call('PUT', '/api/admin/settings', { cookie: adminCookie, body: { homeNotice: '# 公告\n\n- 支持 **Markdown**', homeDesc: '欢迎使用蓝云网盘' } });
+  check('保存主页内容 200', set.status === 200 && String(set.data?.data?.homeNotice).includes('Markdown'), set.text.slice(0, 160));
+  const s2 = await call('GET', '/api/site');
+  check('访客可见新公告', String(s2.data?.data?.homeNotice).includes('Markdown') && s2.data?.data?.homeDesc === '欢迎使用蓝云网盘');
+
+  const empty = await call('PUT', '/api/admin/settings', { cookie: adminCookie, body: { homeNotice: '' } });
+  const s3 = await call('GET', '/api/site');
+  check('公告可置空（前台隐藏模块）', empty.status === 200 && s3.data?.data?.homeNotice === '', JSON.stringify(s3.data?.data?.homeNotice));
+  await call('PUT', '/api/admin/settings', { cookie: adminCookie, body: { homeNotice: HOME_DEFAULT } });
+}
+
+section('文件夹信息（路径浏览弹窗用）');
+{
+  const r = await call('GET', '/api/files/list?path=/文件分享', { cookie: adminCookie });
+  const f = (r.data?.data?.folders || [])[0];
+  check('文件夹带子项统计', !!f && typeof f.subCount === 'number' && typeof f.fileCount === 'number', JSON.stringify(f));
+  check('带空文件夹标记', !!f && typeof f.empty === 'boolean');
+
+  const created = await call('POST', '/api/admin/folders', { cookie: adminCookie, body: { path: '/文件分享/空目录测试' } });
+  const r2 = await call('GET', '/api/files/list?path=/文件分享', { cookie: adminCookie });
+  const ef = (r2.data?.data?.folders || []).find((x) => x.name === '空目录测试');
+  check('新建文件夹标记为空', !!ef && ef.empty === true && ef.subCount === 0 && ef.fileCount === 0, JSON.stringify(ef));
+  const del = await call('DELETE', '/api/admin/folders/' + created.data.data.folder.shareId, { cookie: adminCookie });
+  check('空文件夹可删除', del.status === 200);
+}
+
 /* ---------------- 汇总 ---------------- */console.log(`\n通过 ${pass} 项，失败 ${failures.length} 项`);
 if (failures.length) {
   console.log('失败明细：');

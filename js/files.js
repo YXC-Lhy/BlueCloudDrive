@@ -120,10 +120,11 @@
   }
 
   function folderTile(f) {
+    const count = f.subCount === undefined ? '' : `<span>· ${f.subCount + f.fileCount} 项</span>`;
     return `<div class="file-tile" data-kind="folder" data-share="${esc(f.shareId)}" title="${esc(f.path)}">
       <img src="/img/icon/folder.svg" alt="">
       <div class="ft-name">${esc(f.name)}</div>
-      <div class="ft-meta"><span>文件夹</span></div>
+      <div class="ft-meta"><span>文件夹</span>${count}</div>
     </div>`;
   }
 
@@ -143,11 +144,12 @@
   }
 
   function folderRow(f) {
+    const count = f.subCount === undefined ? '' : `<span>${f.subCount} 个子文件夹 · ${f.fileCount} 个文件</span>`;
     return `<div class="file-row" data-kind="folder" data-share="${esc(f.shareId)}" title="${esc(f.path)}">
       <img src="/img/icon/folder.svg" alt="">
       <div class="fr-main">
         <div class="fr-name">${esc(f.name)}</div>
-        <div class="fr-sub"><span>文件夹</span><span>${esc(f.createdAt || '')}</span></div>
+        <div class="fr-sub"><span>文件夹</span>${count}<span>${esc(f.createdAt || '')}</span></div>
       </div>
     </div>`;
   }
@@ -197,8 +199,9 @@
         onClick: () => newFolder((f.path === '/' ? '' : f.path) + '/'),
       });
       items.push({
-        label: '删除文件夹',
+        label: f.empty === false ? '删除文件夹（文件夹非空）' : '删除文件夹',
         danger: true,
+        disabled: f.empty === false,
         onClick: async () => {
           const ok = await BCD.confirmDlg('删除文件夹', `确定删除文件夹「${f.name}」吗？\n只有空文件夹可以删除。`, { danger: true, okText: '删除' });
           if (!ok) return;

@@ -213,35 +213,33 @@
     return { close, body: bodyEl, foot: footEl, el: mask };
   };
 
+  /**
+   * 二次确认。返回值由 `close(result)` 透传给 onClose，
+   * 避免「先 close 再 resolve」被 onClose 提前覆盖（历史 bug）。
+   */
   BCD.confirmDlg = function (title, message, opts) {
     const o = opts || {};
     return new Promise((resolve) => {
-      const m = BCD.modal({
+      BCD.modal({
         title,
         body: `<div style="line-height:1.7">${BCD.escapeHtml(message).replace(/\n/g, '<br>')}</div>`,
         buttons: [
-          { text: o.cancelText || '取消', onClick: ({ close }) => { close(); resolve(false); } },
+          { text: o.cancelText || '取消', onClick: ({ close }) => close(false) },
           {
             text: o.okText || '确定',
             type: o.danger ? 'danger' : 'primary',
-            onClick: ({ close }) => { close(); resolve(true); },
+            onClick: ({ close }) => close(true),
           },
         ],
-        onClose: () => resolve(false),
+        onClose: (result) => resolve(result === true),
       });
-      return m;
     });
   };
 
+  /** 单行输入弹窗：确定返回字符串，取消 / 关闭返回 null */
   BCD.promptDlg = function (title, opts) {
     const o = opts || {};
     return new Promise((resolve) => {
-      let done = false;
-      const finish = (v) => {
-        if (done) return;
-        done = true;
-        resolve(v);
-      };
       BCD.modal({
         title,
         body: `<div class="form-row" style="max-width:none;margin-bottom:0">
@@ -260,18 +258,14 @@
           });
         },
         buttons: [
-          { text: '取消', onClick: ({ close }) => { close(); finish(null); } },
+          { text: '取消', onClick: ({ close }) => close(null) },
           {
             text: o.okText || '确定',
             type: 'primary',
-            onClick: ({ close, body }) => {
-              const v = body.querySelector('#promptInput').value;
-              close();
-              finish(v);
-            },
+            onClick: ({ close, body }) => close(body.querySelector('#promptInput').value),
           },
         ],
-        onClose: () => finish(null),
+        onClose: (result) => resolve(result === undefined ? null : result),
       });
     });
   };
@@ -342,22 +336,44 @@
     const host = document.querySelector('#topbar');
     if (!host) return;
     const site = BCD.site || {};
-    const admin = site.isAdmin;
-    const links = [];
-    links.push(`<a class="navlink ${o.active === 'home' ? 'active' : ''}" href="/">主页</a>`);
-    links.push(`<a class="navlink ${o.active === 'files' ? 'active' : ''}" href="/files">所有文件</a>`);
+    const admin = !!site.isAdmin;
+    const siteName = site.siteName || '蓝云网盘';
+    document.title = (o.title ? o.title + ' · ' : '') + siteName;
+
+    // 分享页等场景：只保留站点名称与主题切换
+    if (o.minimal) {
+      host.innerHTML = `
+        <a class="brand" href="/"><img src="/img/logo.svg" alt="logo"><span>${BCD.escapeHtml(siteName)}</span></a>
+        <div class="spacer"></div>
+        ${BCD.themeSwitchHtml()}`;
+      BCD.bindThemeSwitch(host);
+      return;
+    }
+
+    const links = [`<a class="navlink ${o.active === 'home' ? 'active' : ''}" href="/">主页</a>`];
+    // 关闭「对访客开放文件浏览」后，访客不再看到任何入口
+    if (admin || site.guestBrowse !== false) {
+      links.push(`<a class="navlink ${o.active === 'files' ? 'active' : ''}" href="/files">所有文件</a>`);
+    }
     links.push(
       admin
         ? `<a class="navlink ${o.active === 'admin' ? 'active' : ''}" href="/admin">管理后台</a>`
-        : `<a class="navlink ${o.active === 'admin' ? 'active' : ''}" href="/admin">管理员登录</a>`
+        : `<a class="navlink ${o.active === 'admin' ? 'active' : ''}" href="/admin">登录</a>`
     );
     host.innerHTML = `
-      <a class="brand" href="/"><img src="/img/logo.svg" alt="logo"><span>${BCD.escapeHtml(site.siteName || '蓝云网盘')}</span></a>
+      <a class="brand" href="/"><img src="/img/logo.svg" alt="logo"><span>${BCD.escapeHtml(siteName)}</span></a>
       <div class="spacer"></div>
       <div class="nav-links">${links.join('')}</div>
       ${BCD.themeSwitchHtml()}`;
     BCD.bindThemeSwitch(host);
-    document.title = (o.title ? o.title + ' · ' : '') + (site.siteName || '蓝云网盘');
+    BCD.applyGuestVisibility();
+  };
+
+  /** 访客不可浏览时隐藏带有 data-require-browse 的入口 */
+  BCD.applyGuestVisibility = function () {
+    const site = BCD.site || {};
+    const hide = !site.isAdmin && site.guestBrowse === false;
+    document.querySelectorAll('[data-require-browse]').forEach((el) => el.classList.toggle('hidden', hide));
   };
 
   /** 页面启动：加载站点信息 + 渲染顶栏 */
@@ -366,9 +382,10 @@
     try {
       BCD.site = await BCD.api('/api/site');
     } catch (e) {
-      BCD.site = { siteName: '蓝云网盘', guestBrowse: true, allowSearch: true, isAdmin: false };
+      BCD.site = { siteName: '蓝云网盘', version: '1.0.1', guestBrowse: true, allowSearch: true, isAdmin: false, homeDesc: '', homeNotice: '' };
     }
     BCD.renderTopbar(o);
+    BCD.applyGuestVisibility();
     return BCD.site;
   };
 
@@ -402,13 +419,6 @@
     if (linkCache[file.shareId]) return linkCache[file.shareId];
     if (file.hasPassword) {
       const result = await new Promise((resolve) => {
-        let settled = false;
-        const finish = (v) => {
-          if (!settled) {
-            settled = true;
-            resolve(v);
-          }
-        };
         BCD.modal({
           title: '需要下载密码',
           body: `<div class="form-row" style="max-width:none;margin-bottom:0">
@@ -417,7 +427,7 @@
               <div class="field-error" data-err="password"></div>
             </div>`,
           buttons: [
-            { text: '取消', onClick: ({ close }) => { close(); finish(null); } },
+            { text: '取消', onClick: ({ close }) => close(null) },
             {
               text: '确定',
               type: 'primary',
@@ -426,15 +436,14 @@
                 if (!pw) return fieldErr(body, 'password', '请输入下载密码');
                 try {
                   const r = await BCD.api(`/api/share/file/${file.shareId}/unlock`, { method: 'POST', body: { password: pw } });
-                  close();
-                  finish(r);
+                  close(r);
                 } catch (e) {
                   fieldErr(body, 'password', e.message);
                 }
               },
             },
           ],
-          onClose: () => finish(null),
+          onClose: (v) => resolve(v === undefined ? null : v),
         });
       });
       if (!result) return null;

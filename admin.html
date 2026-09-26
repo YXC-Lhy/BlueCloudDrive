@@ -25,7 +25,7 @@
     <div class="lc-head">
       <img src="/img/logo.svg" alt="logo">
       <h1 id="loginSiteName">蓝云网盘</h1>
-      <p>管理员登录</p>
+      <p>登录</p>
     </div>
     <div class="form-row" style="max-width:none">
       <label>用户名</label>
@@ -68,6 +68,30 @@
           <label>站点名称</label>
           <input class="input" id="setSiteName" maxlength="32">
           <div class="field-error" data-err="siteName"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>主页内容</h3>
+        <div class="card-desc">主页简介与公告，修改后访客刷新主页即可看到</div>
+        <div class="form-row">
+          <label>主页简介</label>
+          <input class="input" id="setHomeDesc" maxlength="200" placeholder="显示在站点名称下方的一行简介">
+          <div class="hint">纯文本，最多 200 个字符</div>
+          <div class="field-error" data-err="homeDesc"></div>
+        </div>
+        <div class="form-row">
+          <label>主页公告（支持 Markdown）</label>
+          <textarea class="input" id="setHomeNotice" rows="7" placeholder="留空则不显示公告模块"></textarea>
+          <div class="hint">
+            支持 Markdown：# 标题、**粗体**、*斜体*、`代码`、[链接](https://example.com)、- 列表、&gt; 引用、--- 分割线；
+            <b>留空则主页不显示公告模块</b>，最多 5000 个字符
+          </div>
+          <div class="field-error" data-err="homeNotice"></div>
+          <div class="card-actions mt8">
+            <button class="btn sm" type="button" id="btnPreviewNotice">预览公告效果</button>
+            <button class="btn sm" type="button" id="btnResetNotice">恢复默认文案</button>
+          </div>
         </div>
       </div>
 
@@ -223,6 +247,7 @@
 </div>
 
 <script src="/js/common.js"></script>
+<script src="/js/md.js"></script>
 <script src="/js/fileform.js"></script>
 <script src="/js/admin.js"></script>
 </body>
