@@ -34,7 +34,6 @@ BlueCloudDrive/
 │   └── icon/*.svg        文件类型图标（未知类型使用 simple.svg）
 ├── _test/                本地自测与预览（**不要上传**，下划线开头不会被 Pages 发布）
 ├── pack.ps1              一键打包出可上传的 zip
-├── 临时更新日志用于复制文本到github.txt   版本更新记录（含可直接复制到 GitHub Release 的文案）
 ├── wrangler.toml         （可选）用 wrangler 部署 Workers 时的配置
 └── .assetsignore         （可选）Workers 静态资源忽略清单
 ```
