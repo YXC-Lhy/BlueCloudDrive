@@ -614,14 +614,14 @@
 
       <div class="form-row" id="fileOptions" style="max-width:none">
         <label>文件相关选项</label>
-        <label class="switch" style="margin-right:20px"><input type="checkbox" id="optDownloadCount"><span class="track"></span><span class="sw-label">下载次数（默认不勾选）</span></label>
-        <label class="switch"><input type="checkbox" id="optFileDesc" checked><span class="track"></span><span class="sw-label">文件简介（默认勾选）</span></label>
+        <label class="switch" style="margin-right:20px"><input type="checkbox" id="optDownloadCount"><span class="track"></span><span class="sw-label">下载次数</span></label>
+        <label class="switch"><input type="checkbox" id="optFileDesc" checked><span class="track"></span><span class="sw-label">文件简介</span></label>
       </div>
 
       <div class="form-row" id="settingsOptions" style="max-width:none;margin-bottom:0">
         <label>设置相关选项</label>
-        <label class="switch" style="margin-right:20px"><input type="checkbox" id="optAccounts"><span class="track"></span><span class="sw-label">账号列表（默认不勾选）</span></label>
-        <label class="switch"><input type="checkbox" id="optHomeContent"><span class="track"></span><span class="sw-label">主页简介和标题（默认不勾选）</span></label>
+        <label class="switch" style="margin-right:20px"><input type="checkbox" id="optAccounts"><span class="track"></span><span class="sw-label">账号列表</span></label>
+        <label class="switch"><input type="checkbox" id="optHomeContent"><span class="track"></span><span class="sw-label">主页简介和标题</span></label>
       </div>`;
 
     const scopeInputs = [...box.querySelectorAll('input[name=scope]')];
