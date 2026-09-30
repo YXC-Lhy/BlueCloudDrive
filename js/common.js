@@ -336,7 +336,6 @@
     const host = document.querySelector('#topbar');
     if (!host) return;
     const site = BCD.site || {};
-    const admin = !!site.isAdmin;
     const siteName = site.siteName || '蓝云网盘';
     document.title = (o.title ? o.title + ' · ' : '') + siteName;
 
@@ -351,13 +350,15 @@
     }
 
     const links = [`<a class="navlink ${o.active === 'home' ? 'active' : ''}" href="/">主页</a>`];
-    // 关闭「对访客开放文件浏览」后，访客不再看到任何入口
-    if (admin || site.guestBrowse !== false) {
+    // 关闭「对未登录访客开放」后，未登录访客不再看到任何文件入口（已登录用户不受影响）
+    if (site.isAdmin || site.isUser || site.guestBrowse !== false) {
       links.push(`<a class="navlink ${o.active === 'files' ? 'active' : ''}" href="/files">所有文件</a>`);
     }
     links.push(
-      admin
+      site.isAdmin
         ? `<a class="navlink ${o.active === 'admin' ? 'active' : ''}" href="/admin">管理后台</a>`
+        : site.isUser
+        ? `<a class="navlink ${o.active === 'admin' ? 'active' : ''}" href="/admin">我的账号</a>`
         : `<a class="navlink ${o.active === 'admin' ? 'active' : ''}" href="/admin">登录</a>`
     );
     host.innerHTML = `
@@ -369,10 +370,10 @@
     BCD.applyGuestVisibility();
   };
 
-  /** 访客不可浏览时隐藏带有 data-require-browse 的入口 */
+  /** 未登录访客不可浏览时隐藏带有 data-require-browse 的入口 */
   BCD.applyGuestVisibility = function () {
     const site = BCD.site || {};
-    const hide = !site.isAdmin && site.guestBrowse === false;
+    const hide = !site.isAdmin && !site.isUser && site.guestBrowse === false;
     document.querySelectorAll('[data-require-browse]').forEach((el) => el.classList.toggle('hidden', hide));
   };
 
@@ -382,7 +383,7 @@
     try {
       BCD.site = await BCD.api('/api/site');
     } catch (e) {
-      BCD.site = { siteName: '蓝云网盘', version: '1.0.1', guestBrowse: true, allowSearch: true, isAdmin: false, homeDesc: '', homeNotice: '' };
+      BCD.site = { siteName: '蓝云网盘', version: '1.1.0', guestBrowse: true, allowSearch: true, isAdmin: false, homeDesc: '', homeNotice: '' };
     }
     BCD.renderTopbar(o);
     BCD.applyGuestVisibility();
@@ -498,14 +499,19 @@
         `<div class="muted" style="margin-bottom:10px">该文件提供了 ${links.length} 个下载地址，请选择：</div>` +
         links
           .map((l, i) => {
-            const kindText = l.kind === 'external' ? `站外分享${l.source ? ' · 来源：' + BCD.escapeHtml(l.source) : ''}` : '直链';
+            const kindText = l.kind === 'external' ? '站外分享链接' : '直链下载';
+            const sourceTag = l.kind === 'external' && l.source ? ` <span class="badge source">${BCD.escapeHtml(l.source)}</span>` : '';
+            const kindTag =
+              l.kind === 'external'
+                ? '<span class="badge warn">新标签页打开</span>'
+                : '<span class="badge primary">直接下载</span>';
             let host = '';
             try {
               host = new URL(l.url).host;
             } catch (_) {}
             return `<div class="link-item">
                 <div class="li-main">
-                  <div>${i + 1}. ${kindText} ${l.kind === 'external' ? '<span class="badge">打开新标签页</span>' : '<span class="badge primary">直接下载</span>'}</div>
+                  <div>${i + 1}. ${kindText}${sourceTag} ${kindTag}</div>
                   <div class="li-url">${BCD.escapeHtml(host ? host + ' · ' : '')}${BCD.escapeHtml(l.url)}</div>
                 </div>
                 <button class="btn sm primary" data-link="${l.id}">${l.kind === 'external' ? '打开' : '下载'}</button>

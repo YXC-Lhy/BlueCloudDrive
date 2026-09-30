@@ -53,6 +53,7 @@ const BASE = {
   folder: '/文件分享/文档',
   links: [{ kind: 'direct', url: 'https://cdn.example.com/a.pdf' }],
   size: { mode: 'custom', value: '12.34', unit: 'MB' },
+  description: '这是 **Markdown** 简介',
   passwordAction: 'set',
   password: '',
 };
@@ -113,6 +114,7 @@ section('新增文件：字段校验');
     ['大小单位为 TB', { ...BASE, size: { mode: 'custom', value: '1', unit: 'TB' } }, 'size'],
     ['密码 11 位', { ...BASE, password: '12345678901' }, 'password'],
     ['密码含空格', { ...BASE, password: 'abc def' }, 'password'],
+    ['文件简介超长', { ...BASE, description: 'x'.repeat(2001) }, 'description'],
   ];
   for (const [label, body, field] of cases) {
     const r = await call('POST', '/api/admin/files', { cookie: adminCookie, body });
@@ -129,6 +131,10 @@ let fileB = null;
   fileA = a.data?.data?.shareId;
   check('分享编号长度 10', typeof fileA === 'string' && fileA.length === 10);
   check('分享时间精确到分钟', /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(a.data?.data?.createdAt || ''), a.data?.data?.createdAt);
+  const detailA = await call('GET', `/api/admin/files/${fileA}`, { cookie: adminCookie });
+  check('文件简介已保存', detailA.data?.data?.file?.description === '这是 **Markdown** 简介', JSON.stringify(detailA.data?.data?.file?.description));
+  const shareA = await call('GET', `/api/share/file/${fileA}`);
+  check('分享接口返回文件简介', shareA.data?.data?.file?.description === '这是 **Markdown** 简介');
 
   const dup = await call('POST', '/api/admin/files', { cookie: adminCookie, body: BASE });
   check('同路径同名 409', dup.status === 409);
@@ -290,37 +296,91 @@ section('编辑 / 移动 / 删除');
   check('非法目标路径 400', mvBad.status === 400);
 }
 
-section('管理员账号管理');
+section('账号列表（总管理员 / 子管理员 / 用户）');
 let subCookie = '';
+let userCookie = '';
 {
   const bad = await call('POST', '/api/admin/admins', { cookie: adminCookie, body: { username: 'a', password: '123', displayName: 'x'.repeat(40) } });
-  check('子管理员字段校验', bad.status === 400 && !!bad.data.error.fields.username && !!bad.data.error.fields.password && !!bad.data.error.fields.displayName);
-  const okr = await call('POST', '/api/admin/admins', { cookie: adminCookie, body: { username: 'editor01', password: 'editor123', displayName: '编辑员' } });
+  check('账号字段校验', bad.status === 400 && !!bad.data.error.fields.username && !!bad.data.error.fields.password && !!bad.data.error.fields.displayName);
+  const okr = await call('POST', '/api/admin/admins', { cookie: adminCookie, body: { username: 'editor01', password: 'editor123', displayName: '编辑员', role: 'sub' } });
   check('新建子管理员', okr.status === 200, okr.text.slice(0, 160));
   const dup = await call('POST', '/api/admin/admins', { cookie: adminCookie, body: { username: 'editor01', password: 'editor123' } });
   check('用户名重复 409', dup.status === 409);
+  const mkUser = await call('POST', '/api/admin/admins', { cookie: adminCookie, body: { username: 'user01', password: 'user12345', displayName: '普通用户', role: 'user' } });
+  check('新建用户', mkUser.status === 200 && mkUser.data.data.role === 'user', mkUser.text.slice(0, 160));
+
   const login = await call('POST', '/api/auth/login', { body: { username: 'editor01', password: 'editor123' } });
   check('子管理员登录', login.status === 200 && login.data.data.role === 'sub');
   subCookie = login.cookie;
+  const ulogin = await call('POST', '/api/auth/login', { body: { username: 'user01', password: 'user12345' } });
+  check('用户登录', ulogin.status === 200 && ulogin.data.data.role === 'user');
+  userCookie = ulogin.cookie;
+
   const forbidden = await call('POST', '/api/admin/admins', { cookie: subCookie, body: { username: 'x1234', password: 'x12345' } });
-  check('子管理员无权新建账号 403', forbidden.status === 403);
-  const self = await call('GET', '/api/admin/admins', { cookie: subCookie });
-  check('任何人可列出账号', self.status === 200);
+  check('子管理员无权新建账号 403', forbidden.status === 403, String(forbidden.status));
+  const subList = await call('GET', '/api/admin/admins', { cookie: subCookie });
+  check('子管理员无权查看账号列表 403', subList.status === 403, String(subList.status));
+  const userList = await call('GET', '/api/admin/admins', { cookie: userCookie });
+  check('用户无权查看账号列表 403', userList.status === 403, String(userList.status));
+  const subSettings = await call('GET', '/api/admin/settings', { cookie: subCookie });
+  check('子管理员可以查看全局设置', subSettings.status === 200);
+  const subSave = await call('PUT', '/api/admin/settings', { cookie: subCookie, body: { siteName: '蓝云网盘' } });
+  check('子管理员可以修改全局设置', subSave.status === 200, subSave.text.slice(0, 120));
+  const userSettings = await call('GET', '/api/admin/settings', { cookie: userCookie });
+  check('用户无权进入后台设置', userSettings.status === 403, String(userSettings.status));
+  const userFiles = await call('GET', '/api/admin/files', { cookie: userCookie });
+  check('用户无权进入后台文件接口', userFiles.status === 403, String(userFiles.status));
+
+  const self = await call('GET', '/api/admin/admins', { cookie: adminCookie });
+  check('总管理员可列出账号', self.status === 200);
   check('列表不含哈希', self.data.data.admins.every((a) => a.passwordHash === undefined));
+  check('列表含用户角色', self.data.data.admins.some((a) => a.role === 'user'));
+
   const totalRow = self.data.data.admins.find((a) => a.username === 'admin');
   const delTotal = await call('DELETE', `/api/admin/admins/${totalRow.id}`, { cookie: adminCookie });
   check('不能删除最后一个总管理员', delTotal.status === 400, delTotal.text.slice(0, 120));
   const subRow = self.data.data.admins.find((a) => a.username === 'editor01');
+
+  // 改密必须带当前登录账号的原密码
+  const noPw = await call('PUT', `/api/admin/admins/${subRow.id}`, { cookie: adminCookie, body: { password: 'newpass123' } });
+  check('列表改密缺原密码被拒', noPw.status === 400 && !!noPw.data.error.fields.currentPassword, noPw.text.slice(0, 140));
+  const wrongPw = await call('PUT', `/api/admin/admins/${subRow.id}`, { cookie: adminCookie, body: { password: 'newpass123', currentPassword: 'wrongpass' } });
+  check('列表改密原密码错误被拒', wrongPw.status === 400 && !!wrongPw.data.error.fields.currentPassword);
+  const okPw = await call('PUT', `/api/admin/admins/${subRow.id}`, { cookie: adminCookie, body: { status: 'active', password: 'newpass123', currentPassword: 'admin123' } });
+  check('带原密码可以改密', okPw.status === 200, okPw.text.slice(0, 140));
+  const relogin = await call('POST', '/api/auth/login', { body: { username: 'editor01', password: 'newpass123' } });
+  check('新密码可登录', relogin.status === 200);
+  subCookie = relogin.cookie;
+
   const disable = await call('PUT', `/api/admin/admins/${subRow.id}`, { cookie: adminCookie, body: { status: 'disabled' } });
   check('禁用子管理员', disable.status === 200);
   const blocked = await call('GET', '/api/admin/settings', { cookie: subCookie });
   check('被禁用后会话失效', blocked.status === 401, String(blocked.status));
-  const re = await call('PUT', `/api/admin/admins/${subRow.id}`, { cookie: adminCookie, body: { status: 'active', password: 'newpass123' } });
-  check('重新启用并改密', re.status === 200);
-  const relogin = await call('POST', '/api/auth/login', { body: { username: 'editor01', password: 'newpass123' } });
-  check('新密码可登录', relogin.status === 200);
+  const re = await call('PUT', `/api/admin/admins/${subRow.id}`, { cookie: adminCookie, body: { status: 'active' } });
+  check('重新启用', re.status === 200);
+  const relogin2 = await call('POST', '/api/auth/login', { body: { username: 'editor01', password: 'newpass123' } });
+  check('重新启用后可再次登录', relogin2.status === 200);
+  subCookie = relogin2.cookie;
   const selfDel = await call('DELETE', `/api/admin/admins/${totalRow.id}`, { cookie: adminCookie });
   check('不能删除自己', selfDel.status === 400);
+}
+
+section('用户浏览权限');
+{
+  const r = await call('GET', '/api/files/list', { cookie: userCookie });
+  check('用户可浏览（默认根目录 /文件分享）', r.status === 200 && r.data.data.root === '/文件分享', r.text.slice(0, 160));
+  check('用户标记正确', r.data.data.isUser === true && r.data.data.isAdmin === false);
+  const esc = await call('GET', '/api/files/list?path=/', { cookie: userCookie });
+  check('用户无法越权到上级', esc.data.data.path === '/文件分享', JSON.stringify(esc.data.data.path));
+  const noAdmin = await call('GET', '/api/files/list?path=/', { cookie: userCookie });
+  check('用户看不到根目录内容', (noAdmin.data.data.folders || []).every((f) => f.path.startsWith('/文件分享')));
+  const dl = await call('GET', '/api/share/file/' + fileA);
+  check('用户可访问分享信息', dl.status === 200 || dl.status === 404);
+
+  await call('PUT', '/api/admin/settings', { cookie: adminCookie, body: { userRoot: '/归档' } });
+  const r2 = await call('GET', '/api/files/list', { cookie: userCookie });
+  check('用户根目录可被管理员修改', r2.data.data.root === '/归档' && r2.data.data.path === '/归档', JSON.stringify(r2.data.data.path));
+  await call('PUT', '/api/admin/settings', { cookie: adminCookie, body: { userRoot: '/文件分享' } });
 }
 
 section('修改本人账号');
@@ -329,6 +389,13 @@ section('修改本人账号');
   check('原密码错误拦截', bad.status === 400 && !!bad.data.error.fields.oldPassword);
   const okd = await call('PUT', '/api/auth/me', { cookie: adminCookie, body: { displayName: '超级管理员' } });
   check('修改昵称', okd.status === 200 && okd.data.data.displayName === '超级管理员');
+
+  const userPw = await call('PUT', '/api/auth/me', { cookie: userCookie, body: { newPassword: 'user54321', oldPassword: 'user12345' } });
+  check('用户可以修改自己的密码', userPw.status === 200, userPw.text.slice(0, 140));
+  const userRelogin = await call('POST', '/api/auth/login', { body: { username: 'user01', password: 'user54321' } });
+  check('用户新密码可登录', userRelogin.status === 200);
+  userCookie = userRelogin.cookie;
+  await call('PUT', '/api/auth/me', { cookie: adminCookie, body: { displayName: '超级管理员' } });
 }
 
 section('备份 / 恢复');
@@ -340,17 +407,49 @@ section('备份 / 恢复');
     parsed = JSON.parse(backup.text);
   } catch (_) {}
   check('备份结构完整', !!parsed && !!parsed.data && Array.isArray(parsed.data.bcd_files) && parsed.data.bcd_files.length === 2, JSON.stringify(parsed && Object.keys(parsed.data || {})));
-  const denied = await call('POST', '/api/admin/restore', { cookie: subCookie, body: { mode: 'replace', data: parsed } });
-  check('子管理员无权恢复 403', denied.status === 403 || denied.status === 401);
+  check('备份带 scope 与 options', parsed.scope === 'both' && !!parsed.options);
+  check('默认导出不含账号与日志', !parsed.data.bcd_admins && !parsed.data.bcd_logs, JSON.stringify(Object.keys(parsed.data)));
+  check('默认导出不含下载记录', !parsed.data.bcd_downloads);
 
-  const restored = await call('POST', '/api/admin/restore', { cookie: adminCookie, body: { mode: 'replace', data: parsed } });
-  check('恢复成功', restored.status === 200, restored.text.slice(0, 200));
+  const denied = await call('POST', '/api/admin/restore', { cookie: subCookie, body: { scope: 'both', data: parsed } });
+  check('子管理员无权导入 403', denied.status === 403, String(denied.status));
+  const deniedExp = await call('GET', '/api/admin/backup', { cookie: subCookie });
+  check('子管理员无权导出 403', deniedExp.status === 403, String(deniedExp.status));
+
+  const restored = await call('POST', '/api/admin/restore', { cookie: adminCookie, body: { scope: 'both', data: parsed } });
+  check('导入成功', restored.status === 200, restored.text.slice(0, 200));
   const after = await call('GET', '/api/files/list?path=/', { cookie: adminCookie });
-  check('恢复后文件仍在', after.data.data.folders.length >= 1);
+  check('导入后文件仍在', after.data.data.folders.length >= 1);
   const me = await call('GET', '/api/auth/me', { cookie: adminCookie });
-  check('恢复后当前会话仍有效', me.status === 200);
-  const badData = await call('POST', '/api/admin/restore', { cookie: adminCookie, body: { mode: 'replace', data: { foo: 1 } } });
+  check('导入后当前会话仍有效', me.status === 200);
+  const badData = await call('POST', '/api/admin/restore', { cookie: adminCookie, body: { scope: 'both', data: { foo: 1 } } });
   check('非法备份数据 400', badData.status === 400);
+
+  // 只导出文件 / 只导出设置 / 只导出日志
+  const fOnly = JSON.parse((await call('GET', '/api/admin/backup?scope=files', { cookie: adminCookie })).text);
+  check('仅导出文件：含文件表', Array.isArray(fOnly.data.bcd_files) && !!fOnly.data.bcd_links && !!fOnly.data.bcd_folders);
+  check('仅导出文件：不含设置/账号/日志', !fOnly.data.bcd_settings && !fOnly.data.bcd_admins && !fOnly.data.bcd_logs, JSON.stringify(Object.keys(fOnly.data)));
+
+  const sOnly = JSON.parse((await call('GET', '/api/admin/backup?scope=settings', { cookie: adminCookie })).text);
+  check('仅导出设置：含设置表', Array.isArray(sOnly.data.bcd_settings));
+  check('仅导出设置：默认不含账号与主页内容', !sOnly.data.bcd_admins && !sOnly.data.bcd_settings.some((r) => r.key === 'home_desc'));
+  check('仅导出设置：不含会话密钥', !sOnly.data.bcd_settings.some((r) => r.key === 'secret_key'));
+
+  const sFull = JSON.parse((await call('GET', '/api/admin/backup?scope=settings&accounts=1&homeContent=1', { cookie: adminCookie })).text);
+  check('勾选账号列表后导出账号', Array.isArray(sFull.data.bcd_admins) && sFull.data.bcd_admins.length >= 2);
+  check('勾选主页内容后导出标题与简介', sFull.data.bcd_settings.some((r) => r.key === 'site_name') && sFull.data.bcd_settings.some((r) => r.key === 'home_desc'));
+  check('账号导出不含明文密码', sFull.data.bcd_admins.every((a) => a.password === undefined && !!a.password_hash));
+
+  const lOnly = JSON.parse((await call('GET', '/api/admin/backup?scope=logs', { cookie: adminCookie })).text);
+  check('可单独导出日志', Array.isArray(lOnly.data.bcd_logs) && lOnly.data.bcd_logs.length > 0);
+
+  const withDl = JSON.parse((await call('GET', '/api/admin/backup?scope=files&downloadCount=1', { cookie: adminCookie })).text);
+  check('勾选下载次数后导出下载记录', Array.isArray(withDl.data.bcd_downloads));
+  check('默认不导出下载次数（计数归零）', fOnly.data.bcd_files.every((f) => Number(f.download_count) === 0));
+
+  // 导入模式与实际数据不匹配时应报错
+  const mismatch = await call('POST', '/api/admin/restore', { cookie: adminCookie, body: { scope: 'settings', data: fOnly } });
+  check('导入模式与数据不匹配 400', mismatch.status === 400, mismatch.text.slice(0, 140));
 }
 
 section('下载统计开关');
@@ -409,11 +508,37 @@ section('下载记录与日志');
   const cleared = await call('DELETE', '/api/admin/logs', { cookie: adminCookie });
   check('清空日志 200', cleared.status === 200, cleared.text.slice(0, 160));
   check('返回清除条数', cleared.data?.data?.removed > 0);
+  const subLogs = await call('GET', '/api/admin/logs', { cookie: subCookie });
+  check('子管理员无权查看日志 403', subLogs.status === 403, String(subLogs.status));
+  const userLogs = await call('GET', '/api/admin/logs', { cookie: userCookie });
+  check('用户无权查看日志 403', userLogs.status === 403, String(userLogs.status));
+  const subClear = await call('DELETE', '/api/admin/logs', { cookie: subCookie });
+  check('子管理员无权清空日志 403', subClear.status === 403, String(subClear.status));
   const after = await call('GET', '/api/admin/logs', { cookie: adminCookie });
   check('清空后只剩一条清空记录', after.data.data.total === 1 && after.data.data.logs[0].action === 'clear_logs', JSON.stringify(after.data.data));
   // 复位：清空后再产生日志不影响后续断言
   const refill = await call('PUT', '/api/admin/settings', { cookie: adminCookie, body: { siteName: '蓝云网盘' } });
   check('清空后仍可正常写日志', refill.status === 200);
+
+  // 日志规则：只保留 50 条、不记录用户相关、不记录文件创建/修改
+  for (let i = 0; i < 60; i++) {
+    await call('PUT', '/api/admin/settings', { cookie: adminCookie, body: { siteName: '蓝云网盘' } });
+  }
+  const cnt = Number(env.DB.raw.prepare('SELECT COUNT(*) AS c FROM bcd_logs').get().c);
+  check('日志最多保留 50 条', cnt <= 50, String(cnt));
+  const actions = env.DB.raw.prepare('SELECT DISTINCT action FROM bcd_logs').all().map((r) => r.action);
+  check('不记录文件创建日志', !actions.includes('create_file'), JSON.stringify(actions));
+  check('不记录文件修改日志', !actions.includes('update_file'));
+  const actors = env.DB.raw.prepare('SELECT DISTINCT actor FROM bcd_logs').all().map((r) => r.actor);
+  check('不记录用户相关日志', !actors.includes('user01'), JSON.stringify(actors));
+
+  // 造一批文件创建/修改操作，确认日志里依然没有对应动作
+  await call('PUT', `/api/admin/files/${fileA}`, {
+    cookie: adminCookie,
+    body: { name: '测试文档v2.pdf', folder: '/归档/2024', links: [{ kind: 'direct', url: 'https://cdn.example.com/b.pdf' }], size: { mode: 'unknown' } },
+  });
+  const actions2 = env.DB.raw.prepare('SELECT DISTINCT action FROM bcd_logs').all().map((r) => r.action);
+  check('修改文件后也没有 update_file 日志', !actions2.includes('update_file'), JSON.stringify(actions2));
 }
 
 section('站点名称兜底');
@@ -434,7 +559,7 @@ const HOME_DEFAULT = '主页内容建设中…… 你可以先前往「所有文
   const s = await call('GET', '/api/site');
   check('默认简介为指定文案', s.data?.data?.homeDesc === HOME_DEFAULT, JSON.stringify(s.data?.data?.homeDesc));
   check('默认公告与简介一致', s.data?.data?.homeNotice === HOME_DEFAULT);
-  check('版本号为 1.0.1', s.data?.data?.version === '1.0.1', s.data?.data?.version);
+  check('版本号为 1.1.0', s.data?.data?.version === '1.1.0', s.data?.data?.version);
   check('返回仓库地址', /github\.com\/YXC-Lhy\/BlueCloudDrive/.test(s.data?.data?.repoUrl || ''), s.data?.data?.repoUrl);
 
   const tooLong = await call('PUT', '/api/admin/settings', { cookie: adminCookie, body: { homeNotice: 'x'.repeat(5001) } });

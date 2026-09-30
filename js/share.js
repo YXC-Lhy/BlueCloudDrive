@@ -24,9 +24,10 @@
       host = new URL(l.url).host;
     } catch (_) {}
     const isExt = l.kind === 'external';
+    const sourceTag = isExt && l.source ? ` <span class="badge source">${esc(l.source)}</span>` : '';
     return `<div class="link-item">
       <div class="li-main">
-        <div>${i + 1}. ${isExt ? '站外分享链接' + (l.source ? ' · 来源：' + esc(l.source) : '') : '直链下载'}
+        <div>${i + 1}. ${isExt ? '站外分享链接' : '直链下载'}${sourceTag}
           <span class="badge ${isExt ? 'warn' : 'primary'}">${isExt ? '新标签页打开' : '直接下载'}</span></div>
         <div class="li-url">${esc(host)}${host ? ' · ' : ''}${esc(l.url)}</div>
       </div>
@@ -65,8 +66,18 @@
         <div class="sm-item"><div class="sm-k">下载密码</div><div class="sm-v">${f.hasPassword ? '已设置' : '无'}</div></div>
       </div>
 
+      <div id="descArea"></div>
       <div id="linkArea"></div>
     </div>`;
+
+    // 文件简介（Markdown，为空时不显示）
+    const desc = String(f.description || '').trim();
+    if (desc) {
+      const descArea = root.querySelector('#descArea');
+      descArea.className = 'share-desc';
+      descArea.innerHTML = '<h3 style="font-size:14px;margin-bottom:8px">文件简介</h3><div class="md-body"></div>';
+      descArea.querySelector('.md-body').innerHTML = BCD.markdown(desc);
+    }
 
     const area = root.querySelector('#linkArea');
 

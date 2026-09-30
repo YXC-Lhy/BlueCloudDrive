@@ -9,7 +9,7 @@
  * ============================================================================
  */
 
-const VERSION = '1.0.1';
+const VERSION = '1.1.0';
 const REPO_URL = 'https://github.com/YXC-Lhy/BlueCloudDrive';
 const COOKIE_NAME = 'bcd_token';
 const SESSION_DAYS = 7;
@@ -20,11 +20,15 @@ const DEFAULT_SETTINGS = {
   site_name: '蓝云网盘',
   home_desc: HOME_TEXT_DEFAULT, // 主页简介（纯文本）
   home_notice: HOME_TEXT_DEFAULT, // 主页公告（Markdown，留空则不显示）
-  guest_browse: '1', // 全部文件浏览界面是否对访客开放
-  guest_root: '/文件分享', // 访客根目录
+  guest_browse: '1', // 「所有文件」是否对未登录访客开放
+  guest_root: '/文件分享', // 未登录访客根目录
+  user_root: '/文件分享', // 普通用户（已登录）根目录
   allow_search: '1', // 是否允许搜索
   count_download: '1', // 是否统计下载次数
 };
+
+/** 日志最多保存条数 */
+const LOG_LIMIT = 50;
 
 const DEFAULT_ADMIN = { username: 'admin', password: 'admin123', display_name: '总管理员' };
 
@@ -79,6 +83,7 @@ const MIGRATIONS = [
      ext            TEXT NOT NULL DEFAULT '',
      size_bytes     INTEGER,
      size_text      TEXT NOT NULL DEFAULT '未知',
+     description    TEXT NOT NULL DEFAULT '',
      password_hash  TEXT,
      password_salt  TEXT,
      download_count INTEGER NOT NULL DEFAULT 0,
@@ -122,6 +127,9 @@ const MIGRATIONS = [
      created_at TEXT NOT NULL DEFAULT ''
    )`,
 ];
+
+/* 老库升级：补充后加的列（列已存在时会报错，忽略即可） */
+const ALTERS = [`ALTER TABLE bcd_files ADD COLUMN description TEXT NOT NULL DEFAULT ''`];
 
 /* ============================ 通用工具 ============================ */
 const enc = new TextEncoder();
@@ -244,6 +252,15 @@ async function initDb(env) {
   const DB = db(env);
   await DB.batch(MIGRATIONS.map((sql) => DB.prepare(sql)));
 
+  // 兼容老库：补充后加的列
+  for (const sql of ALTERS) {
+    try {
+      await DB.prepare(sql).run();
+    } catch (_) {
+      /* 列已存在 */
+    }
+  }
+
   const now = nowBeijing();
   const existing = await DB.prepare('SELECT key FROM bcd_settings').all();
   const have = new Set(((existing && existing.results) || []).map((r) => r.key));
@@ -291,11 +308,23 @@ async function getSetting(env, key) {
   return row ? row.value : DEFAULT_SETTINGS[key];
 }
 
+/**
+ * 写操作日志。
+ * - actor 可传字符串或 { username, role }
+ * - 「用户」账号产生的日志不记录
+ * - 只保留最近 LOG_LIMIT 条
+ */
 async function logAction(env, actor, action, target, detail, request) {
   try {
+    const name = typeof actor === 'string' ? actor : (actor && actor.username) || '';
+    const role = typeof actor === 'string' ? '' : (actor && actor.role) || '';
+    if (role === 'user') return; // 与「用户」有关的操作不记录
     await db(env)
       .prepare('INSERT INTO bcd_logs(actor,action,target,detail,ip,created_at) VALUES(?,?,?,?,?,?)')
-      .bind(actor || '', action || '', target || '', String(detail || '').slice(0, 500), clientIp(request || {}), nowBeijing())
+      .bind(name, action || '', target || '', String(detail || '').slice(0, 500), clientIp(request || {}), nowBeijing())
+      .run();
+    await db(env)
+      .prepare(`DELETE FROM bcd_logs WHERE id NOT IN (SELECT id FROM bcd_logs ORDER BY id DESC LIMIT ${LOG_LIMIT})`)
       .run();
   } catch (_) {
     /* 日志失败不影响主流程 */
@@ -460,19 +489,29 @@ async function currentAdmin(request, env) {
     return null;
   }
   if (row.status !== 'active') return null;
+  const role = row.role === 'total' ? 'total' : row.role === 'user' ? 'user' : 'sub';
   return {
     id: Number(row.admin_id),
     username: row.username,
     displayName: row.display_name || row.username,
-    role: row.role === 'total' ? 'total' : 'sub',
+    role,
+    isStaff: role === 'total' || role === 'sub',
     token,
   };
 }
 
+/** 任意已登录账号（总管理员 / 子管理员 / 用户） */
+async function requireLogin(request, env) {
+  const account = await currentAdmin(request, env);
+  if (!account) throw new ApiError('登录状态已失效，请重新登录', 401);
+  return account;
+}
+
+/** 管理员（总管理员 / 子管理员）；「用户」无权访问后台接口 */
 async function requireAdmin(request, env) {
-  const admin = await currentAdmin(request, env);
-  if (!admin) throw new ApiError('登录状态已失效，请重新登录', 401);
-  return admin;
+  const account = await requireLogin(request, env);
+  if (!account.isStaff) throw new ApiError('当前账号没有管理权限', 403);
+  return account;
 }
 async function requireTotal(request, env) {
   const admin = await requireAdmin(request, env);
@@ -497,6 +536,7 @@ function serializeFile(row, linkCount) {
     ext: row.ext || '',
     sizeBytes: row.size_bytes === null || row.size_bytes === undefined ? null : Number(row.size_bytes),
     sizeText: row.size_text || '未知',
+    description: row.description || '',
     hasPassword: !!row.password_hash,
     downloadCount: Number(row.download_count || 0),
     createdAt: row.created_at,
@@ -626,9 +666,12 @@ async function handleApi(request, env, url) {
       homeNotice: s.home_notice === undefined ? DEFAULT_SETTINGS.home_notice : s.home_notice,
       guestBrowse: s.guest_browse === '1',
       guestRoot: s.guest_root || DEFAULT_SETTINGS.guest_root,
+      userRoot: s.user_root || DEFAULT_SETTINGS.user_root,
       allowSearch: s.allow_search === '1',
       countDownload: s.count_download === '1',
-      isAdmin: !!admin,
+      isAdmin: !!(admin && admin.isStaff),
+      isUser: !!(admin && admin.role === 'user'),
+      role: admin ? admin.role : 'guest',
       admin: admin ? { username: admin.username, displayName: admin.displayName, role: admin.role } : null,
     });
   }
@@ -647,11 +690,12 @@ async function handleApi(request, env, url) {
     if (hash !== row.password_hash) fail('用户名或密码错误', 401);
     const { token, expires } = await createSession(env, Number(row.id), request);
     await db(env).prepare('UPDATE bcd_admins SET last_login_at=? WHERE id=?').bind(nowBeijing(), Number(row.id)).run();
-    await logAction(env, username, 'login', username, '登录成功', request);
+    const role = row.role === 'total' ? 'total' : row.role === 'user' ? 'user' : 'sub';
+    await logAction(env, { username, role }, 'login', username, '登录成功', request);
     return json(
       {
         ok: true,
-        data: { username: row.username, displayName: row.display_name || row.username, role: row.role === 'total' ? 'total' : 'sub', expires },
+        data: { username: row.username, displayName: row.display_name || row.username, role, expires },
       },
       200,
       { 'Set-Cookie': `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}` }
@@ -670,9 +714,9 @@ async function handleApi(request, env, url) {
     return ok({ username: admin.username, displayName: admin.displayName, role: admin.role });
   }
 
-  /* ---------- 修改自己的账号 ---------- */
+  /* ---------- 修改自己的账号（包括「用户」，只能改自己的昵称与密码） ---------- */
   if (path === '/api/auth/me' && method === 'PUT') {
-    const admin = await requireAdmin(request, env);
+    const admin = await requireLogin(request, env);
     const body = await readJson(request);
     const fields = {};
     const displayName = String(body.displayName === undefined ? admin.displayName : body.displayName).trim();
@@ -699,7 +743,7 @@ async function handleApi(request, env, url) {
     } else {
       await db(env).prepare('UPDATE bcd_admins SET display_name=? WHERE id=?').bind(displayName, admin.id).run();
     }
-    await logAction(env, admin.username, 'update_profile', admin.username, '修改个人资料', request);
+    await logAction(env, admin, 'update_profile', admin.username, '修改个人资料', request);
     return ok({ displayName });
   }
 
@@ -715,10 +759,12 @@ async function handleApi(request, env, url) {
       homeNotice: s.home_notice === undefined ? DEFAULT_SETTINGS.home_notice : s.home_notice,
       guestBrowse: s.guest_browse === '1',
       guestRoot: s.guest_root,
+      userRoot: s.user_root || DEFAULT_SETTINGS.user_root,
       allowSearch: s.allow_search === '1',
       countDownload: s.count_download === '1',
       initializedAt: s.initialized_at || '',
-      adminCount: Number((await db(env).prepare('SELECT COUNT(*) AS c FROM bcd_admins').first()).c),
+      adminCount: Number((await db(env).prepare("SELECT COUNT(*) AS c FROM bcd_admins WHERE role<>'user'").first()).c),
+      userCount: Number((await db(env).prepare("SELECT COUNT(*) AS c FROM bcd_admins WHERE role='user'").first()).c),
       fileCount: Number((await db(env).prepare('SELECT COUNT(*) AS c FROM bcd_files').first()).c),
     });
   }
@@ -738,9 +784,14 @@ async function handleApi(request, env, url) {
       else put('site_name', name);
     }
     if (body.guestRoot !== undefined) {
-      const r = normalizePath(body.guestRoot, '访客根目录');
+      const r = normalizePath(body.guestRoot, '未登录访客根目录');
       if (r.error) fields.guestRoot = r.error;
       else put('guest_root', r.value);
+    }
+    if (body.userRoot !== undefined) {
+      const r = normalizePath(body.userRoot, '用户根目录');
+      if (r.error) fields.userRoot = r.error;
+      else put('user_root', r.value);
     }
     if (body.homeDesc !== undefined) {
       const v = String(body.homeDesc).trim();
@@ -759,7 +810,7 @@ async function handleApi(request, env, url) {
     if (Object.keys(fields).length) fail('请检查填写内容', 400, fields);
     if (!updates.length) fail('没有需要保存的设置', 400);
     await db(env).batch(updates);
-    await logAction(env, admin.username, 'update_settings', 'global', JSON.stringify(body).slice(0, 300), request);
+    await logAction(env, admin, 'update_settings', 'global', JSON.stringify(body).slice(0, 300), request);
     const s = await getSettings(env);
     return ok({
       siteName: s.site_name || DEFAULT_SETTINGS.site_name,
@@ -768,23 +819,24 @@ async function handleApi(request, env, url) {
       homeNotice: s.home_notice === undefined ? DEFAULT_SETTINGS.home_notice : s.home_notice,
       guestBrowse: s.guest_browse === '1',
       guestRoot: s.guest_root,
+      userRoot: s.user_root || DEFAULT_SETTINGS.user_root,
       allowSearch: s.allow_search === '1',
       countDownload: s.count_download === '1',
     });
   }
 
-  /* ---------- 管理员账号管理 ---------- */
+  /* ---------- 账号列表（仅总管理员） ---------- */
   if (path === '/api/admin/admins' && method === 'GET') {
-    await requireAdmin(request, env);
+    await requireTotal(request, env);
     const res = await db(env)
-      .prepare('SELECT id,username,display_name,role,status,created_by,created_at,last_login_at FROM bcd_admins ORDER BY role DESC, id ASC')
+      .prepare("SELECT id,username,display_name,role,status,created_by,created_at,last_login_at FROM bcd_admins ORDER BY CASE role WHEN 'total' THEN 0 WHEN 'sub' THEN 1 ELSE 2 END, id ASC")
       .all();
     return ok({
       admins: ((res && res.results) || []).map((r) => ({
         id: Number(r.id),
         username: r.username,
         displayName: r.display_name || r.username,
-        role: r.role === 'total' ? 'total' : 'sub',
+        role: r.role === 'total' ? 'total' : r.role === 'user' ? 'user' : 'sub',
         status: r.status,
         createdBy: r.created_by,
         createdAt: r.created_at,
@@ -799,6 +851,7 @@ async function handleApi(request, env, url) {
     const fields = {};
     const username = String(body.username || '').trim();
     const displayName = String(body.displayName || '').trim();
+    const role = body.role === 'user' ? 'user' : 'sub';
     if (!username) fields.username = '请输入用户名';
     else if (!/^[A-Za-z0-9_.-]{3,32}$/.test(username)) fields.username = '用户名只能包含字母、数字、_ . -，长度 3-32';
     const pv = validateAdminPassword(body.password, '密码');
@@ -811,22 +864,21 @@ async function handleApi(request, env, url) {
     const hash = await hashPassword(String(body.password), salt);
     await db(env)
       .prepare('INSERT INTO bcd_admins(username,password_hash,salt,display_name,role,status,created_by,created_at,last_login_at) VALUES(?,?,?,?,?,?,?,?,?)')
-      .bind(username, hash, salt, displayName || username, 'sub', 'active', admin.username, nowBeijing(), '')
+      .bind(username, hash, salt, displayName || username, role, 'active', admin.username, nowBeijing(), '')
       .run();
-    await logAction(env, admin.username, 'create_admin', username, '新建子管理员', request);
-    return ok({ username });
+    await logAction(env, admin, 'create_admin', username, role === 'user' ? '新建用户' : '新建子管理员', request);
+    return ok({ username, role });
   }
 
   const adminIdMatch = path.match(/^\/api\/admin\/admins\/(\d+)$/);
   if (adminIdMatch) {
     const id = Number(adminIdMatch[1]);
-    const admin = await requireAdmin(request, env);
+    const admin = await requireTotal(request, env);
     const target = await db(env).prepare('SELECT * FROM bcd_admins WHERE id=?').bind(id).first();
     if (!target) fail('账号不存在', 404);
     const isSelf = Number(target.id) === Number(admin.id);
 
     if (method === 'PUT') {
-      if (!isSelf && admin.role !== 'total') fail('只有总管理员可以修改其它账号', 403);
       const body = await readJson(request);
       const fields = {};
       const sets = [];
@@ -840,9 +892,17 @@ async function handleApi(request, env, url) {
         }
       }
       if (body.password) {
-        const pv = validateAdminPassword(body.password, '密码');
+        // 安全要求：在账号列表里改密必须验证「当前登录账号」的原密码，避免会话被盗后直接改密
+        const pv = validateAdminPassword(body.password, '新密码');
         if (pv.error) fields.password = pv.error;
+        const current = String(body.currentPassword || '');
+        if (!current) fields.currentPassword = '请输入你当前登录账号的密码';
         else {
+          const me = await db(env).prepare('SELECT salt,password_hash FROM bcd_admins WHERE id=?').bind(admin.id).first();
+          const okPw = (await hashPassword(current, me.salt)) === me.password_hash;
+          if (!okPw) fields.currentPassword = '当前登录账号的密码不正确';
+        }
+        if (!fields.password && !fields.currentPassword) {
           const salt = randomToken(16);
           sets.push('password_hash=?', 'salt=?');
           binds.push(await hashPassword(String(body.password), salt), salt);
@@ -857,24 +917,27 @@ async function handleApi(request, env, url) {
         }
       }
       if (body.role !== undefined && !isSelf) {
-        if (admin.role !== 'total') fields.role = '只有总管理员可以调整角色';
+        if (target.role === 'total') fields.role = '总管理员账号的角色不能修改';
         else {
           sets.push('role=?');
-          binds.push(body.role === 'total' ? 'total' : 'sub');
+          binds.push(body.role === 'user' ? 'user' : 'sub');
         }
       }
       if (Object.keys(fields).length) fail('请检查填写内容', 400, fields);
       if (!sets.length) fail('没有需要修改的内容', 400);
       await db(env).prepare(`UPDATE bcd_admins SET ${sets.join(', ')} WHERE id=?`).bind(...binds, id).run();
       if (body.password || body.status === 'disabled') {
-        await db(env).prepare('DELETE FROM bcd_sessions WHERE admin_id=?').bind(id).run();
+        if (isSelf) {
+          await db(env).prepare('DELETE FROM bcd_sessions WHERE admin_id=? AND token<>?').bind(id, admin.token).run();
+        } else {
+          await db(env).prepare('DELETE FROM bcd_sessions WHERE admin_id=?').bind(id).run();
+        }
       }
-      await logAction(env, admin.username, 'update_admin', target.username, JSON.stringify(Object.keys(body)).slice(0, 200), request);
+      await logAction(env, admin, 'update_admin', target.username, JSON.stringify(Object.keys(body)).slice(0, 200), request);
       return ok({ id });
     }
 
     if (method === 'DELETE') {
-      if (admin.role !== 'total') fail('只有总管理员可以删除账号', 403);
       if (isSelf) fail('不能删除当前登录的账号', 400);
       if (target.role === 'total') {
         const c = await db(env).prepare("SELECT COUNT(*) AS c FROM bcd_admins WHERE role='total' AND status='active'").first();
@@ -884,26 +947,28 @@ async function handleApi(request, env, url) {
         db(env).prepare('DELETE FROM bcd_sessions WHERE admin_id=?').bind(id),
         db(env).prepare('DELETE FROM bcd_admins WHERE id=?').bind(id),
       ]);
-      await logAction(env, admin.username, 'delete_admin', target.username, '删除账号', request);
+      await logAction(env, admin, 'delete_admin', target.username, target.role === 'user' ? '删除用户' : '删除账号', request);
       return ok({ id });
     }
   }
 
-  /* ---------- 全部文件浏览（访客可用） ---------- */
+  /* ---------- 全部文件浏览（访客 / 用户 / 管理员） ---------- */
   if (path === '/api/files/list' && method === 'GET') {
     const s = await getSettings(env);
-    const admin = await currentAdmin(request, env);
+    const account = await currentAdmin(request, env);
+    const isStaff = !!(account && account.isStaff);
+    const isUser = !!(account && account.role === 'user');
     const guestBrowse = s.guest_browse === '1';
-    if (!admin && !guestBrowse) fail('管理员未开放文件浏览', 403);
-    const root = admin ? '/' : s.guest_root || DEFAULT_SETTINGS.guest_root;
+    if (!account && !guestBrowse) fail('管理员未开放文件浏览', 403);
+    const root = isStaff ? '/' : isUser ? s.user_root || DEFAULT_SETTINGS.user_root : s.guest_root || DEFAULT_SETTINGS.guest_root;
     let reqPath = q.get('path') || root;
     const np = normalizePath(reqPath, '目录路径');
     if (np.error) fail(np.error, 400, { path: np.error });
     let cur = np.value;
-    if (!admin && !isInside(root, cur)) cur = root;
+    if (!isStaff && !isInside(root, cur)) cur = root;
 
     const search = (q.get('search') || '').trim();
-    if (search && !admin && s.allow_search !== '1') fail('管理员未开放搜索功能', 403);
+    if (search && !isStaff && s.allow_search !== '1') fail('管理员未开放搜索功能', 403);
     const sort = ['name', 'size', 'time', 'type', 'downloads'].includes(q.get('sort')) ? q.get('sort') : 'name';
     const order = q.get('order') === 'desc' ? 'DESC' : 'ASC';
     const page = Math.max(1, parseInt(q.get('page') || '1', 10) || 1);
@@ -964,14 +1029,16 @@ async function handleApi(request, env, url) {
       path: cur,
       parent,
       root,
-      isAdmin: !!admin,
+      isAdmin: isStaff,
+      isUser,
+      role: account ? account.role : 'guest',
       breadcrumb: breadcrumbFor(root, cur),
       folders,
       files,
       total,
       page,
       pageSize,
-      allowSearch: admin ? true : s.allow_search === '1',
+      allowSearch: isStaff ? true : s.allow_search === '1',
       countDownload: s.count_download === '1',
     });
   }
@@ -1160,17 +1227,16 @@ async function handleApi(request, env, url) {
     const now = nowBeijing();
     const res = await db(env)
       .prepare(
-        `INSERT INTO bcd_files(share_id,name,folder,path,ext,size_bytes,size_text,password_hash,password_salt,download_count,created_at,updated_at)
-         VALUES(?,?,?,?,?,?,?,?,?,0,?,?)`
+        `INSERT INTO bcd_files(share_id,name,folder,path,ext,size_bytes,size_text,description,password_hash,password_salt,download_count,created_at,updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,0,?,?)`
       )
-      .bind(shareId, d.name, d.folder, (d.folder === '/' ? '' : d.folder) + '/' + d.name, d.ext, d.sizeBytes, d.sizeText, d.passwordHash, d.passwordSalt, now, now)
+      .bind(shareId, d.name, d.folder, (d.folder === '/' ? '' : d.folder) + '/' + d.name, d.ext, d.sizeBytes, d.sizeText, d.description, d.passwordHash, d.passwordSalt, now, now)
       .run();
     const fileId = Number((res && res.meta && res.meta.last_row_id) || 0) || Number((await db(env).prepare('SELECT id FROM bcd_files WHERE share_id=?').bind(shareId).first()).id);
     const stmts = d.links.map((l) =>
       db(env).prepare('INSERT INTO bcd_links(file_id,kind,url,source,sort_order) VALUES(?,?,?,?,?)').bind(fileId, l.kind, l.url, l.source, l.sort_order)
     );
     if (stmts.length) await db(env).batch(stmts);
-    await logAction(env, admin.username, 'create_file', shareId, d.path, request);
     return ok({ shareId, id: fileId, createdAt: now });
   }
 
@@ -1199,16 +1265,15 @@ async function handleApi(request, env, url) {
       const now = nowBeijing();
       await db(env)
         .prepare(
-          `UPDATE bcd_files SET name=?, folder=?, path=?, ext=?, size_bytes=?, size_text=?, password_hash=?, password_salt=?, updated_at=? WHERE id=?`
+          `UPDATE bcd_files SET name=?, folder=?, path=?, ext=?, size_bytes=?, size_text=?, description=?, password_hash=?, password_salt=?, updated_at=? WHERE id=?`
         )
-        .bind(d.name, d.folder, (d.folder === '/' ? '' : d.folder) + '/' + d.name, d.ext, d.sizeBytes, d.sizeText, d.passwordHash, d.passwordSalt, now, row.id)
+        .bind(d.name, d.folder, (d.folder === '/' ? '' : d.folder) + '/' + d.name, d.ext, d.sizeBytes, d.sizeText, d.description, d.passwordHash, d.passwordSalt, now, row.id)
         .run();
       await db(env).prepare('DELETE FROM bcd_links WHERE file_id=?').bind(row.id).run();
       const stmts = d.links.map((l) =>
         db(env).prepare('INSERT INTO bcd_links(file_id,kind,url,source,sort_order) VALUES(?,?,?,?,?)').bind(row.id, l.kind, l.url, l.source, l.sort_order)
       );
       if (stmts.length) await db(env).batch(stmts);
-      await logAction(env, admin.username, 'update_file', row.share_id, d.path, request);
       return ok({ shareId: row.share_id });
     }
 
@@ -1218,7 +1283,7 @@ async function handleApi(request, env, url) {
         db(env).prepare('DELETE FROM bcd_downloads WHERE file_id=?').bind(row.id),
         db(env).prepare('DELETE FROM bcd_files WHERE id=?').bind(row.id),
       ]);
-      await logAction(env, admin.username, 'delete_file', row.share_id, row.path, request);
+      await logAction(env, admin, 'delete_file', row.share_id, row.path, request);
       return ok({ shareId: row.share_id });
     }
   }
@@ -1238,7 +1303,7 @@ async function handleApi(request, env, url) {
     await ensureFolders(env, folder);
     const newPath = (folder === '/' ? '' : folder) + '/' + row.name;
     await db(env).prepare('UPDATE bcd_files SET folder=?, path=?, updated_at=? WHERE id=?').bind(folder, newPath, nowBeijing(), row.id).run();
-    await logAction(env, admin.username, 'move_file', row.share_id, `${row.path} -> ${newPath}`, request);
+    await logAction(env, admin, 'move_file', row.share_id, `${row.path} -> ${newPath}`, request);
     return ok({ path: newPath });
   }
 
@@ -1261,7 +1326,7 @@ async function handleApi(request, env, url) {
     if (exists) fail('该文件夹已存在', 409, { path: '该文件夹已存在' });
     await ensureFolders(env, np.value);
     const created = await db(env).prepare('SELECT * FROM bcd_folders WHERE path=?').bind(np.value).first();
-    await logAction(env, admin.username, 'create_folder', created.share_id, np.value, request);
+    await logAction(env, admin, 'create_folder', created.share_id, np.value, request);
     return ok({ folder: serializeFolder(created) });
   }
 
@@ -1275,32 +1340,70 @@ async function handleApi(request, env, url) {
     if (sub > 0) fail('文件夹内还有子文件夹，请先清空', 400);
     if (files > 0) fail('文件夹内还有文件，请先删除文件', 400);
     await db(env).prepare('DELETE FROM bcd_folders WHERE id=?').bind(folder.id).run();
-    await logAction(env, admin.username, 'delete_folder', folder.share_id, folder.path, request);
+    await logAction(env, admin, 'delete_folder', folder.share_id, folder.path, request);
     return ok({ shareId: folder.share_id });
   }
 
-  /* ---------- 备份 / 恢复 ---------- */
+  /* ---------- 数据导出 / 导入（仅总管理员） ----------
+     scope   : files（文件） | settings（设置） | both（文件和设置） | logs（日志，仅导出）
+     options : downloadCount 下载次数（默认否） / fileDesc 文件简介（默认是）
+               accounts 账号列表（默认否） / homeContent 主页简介和标题（默认否）
+     -------------------------------------------------- */
   if (path === '/api/admin/backup' && method === 'GET') {
-    const admin = await requireAdmin(request, env);
-    const tables = ['bcd_settings', 'bcd_admins', 'bcd_folders', 'bcd_files', 'bcd_links', 'bcd_downloads', 'bcd_logs'];
+    const admin = await requireTotal(request, env);
+    const scope = ['files', 'settings', 'both', 'logs'].includes(q.get('scope')) ? q.get('scope') : 'both';
+    const options = {
+      downloadCount: q.get('downloadCount') === '1',
+      fileDesc: q.get('fileDesc') !== '0',
+      accounts: q.get('accounts') === '1',
+      homeContent: q.get('homeContent') === '1',
+    };
+    const tables = [];
+    if (scope === 'files' || scope === 'both') tables.push('bcd_folders', 'bcd_files', 'bcd_links');
+    if ((scope === 'files' || scope === 'both') && options.downloadCount) tables.push('bcd_downloads');
+    if (scope === 'settings' || scope === 'both') tables.push('bcd_settings');
+    if (scope === 'logs') tables.push('bcd_logs');
+    if ((scope === 'settings' || scope === 'both') && options.accounts) tables.push('bcd_admins');
+
+    const HOME_KEYS = ['site_name', 'home_desc', 'home_notice'];
     const data = {};
     for (const t of tables) {
       const res = await db(env).prepare(`SELECT * FROM ${t}`).all();
-      data[t] = (res && res.results) || [];
+      let rows = (res && res.results) || [];
+      if (t === 'bcd_files') {
+        rows = rows.map((r) => {
+          const row = { ...r };
+          if (!options.downloadCount) row.download_count = 0; // 不导出下载次数
+          if (!options.fileDesc) row.description = ''; // 不导出文件简介
+          return row;
+        });
+      }
+      if (t === 'bcd_settings') {
+        rows = rows.filter((r) => {
+          if (r.key === 'secret_key') return false; // 会话签名密钥不导出
+          if (HOME_KEYS.includes(r.key)) return options.homeContent; // 主页简介和标题
+          return true;
+        });
+      }
+      data[t] = rows;
     }
+
     const payload = {
       app: 'BlueCloudDrive',
       version: VERSION,
       exportedAt: nowBeijing(),
       exportedBy: admin.username,
+      scope,
+      options,
       data,
     };
-    await logAction(env, admin.username, 'backup', 'd1', `${tables.join(',')}`, request);
-    const filename = `bcd-backup-${nowBeijing().replace(/[-: ]/g, '')}.json`;
+    await logAction(env, admin, 'export', scope, JSON.stringify(options), request);
+    const names = { files: '文件', settings: '设置', both: '文件和设置', logs: '日志' };
+    const filename = `bcd-${scope}-${nowBeijing().replace(/[-: ]/g, '')}.json`;
     return new Response(JSON.stringify(payload, null, 2), {
       headers: {
         'content-type': 'application/json; charset=utf-8',
-        'content-disposition': `attachment; filename="${filename}"`,
+        'content-disposition': `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(`蓝云网盘-${names[scope]}-${nowBeijing().replace(/[-: ]/g, '')}.json`)}`,
         'cache-control': 'no-store',
       },
     });
@@ -1309,60 +1412,91 @@ async function handleApi(request, env, url) {
   if (path === '/api/admin/restore' && method === 'POST') {
     const admin = await requireTotal(request, env);
     const body = await readJson(request, 8 * 1024 * 1024);
+    const scope = ['files', 'settings', 'both'].includes(body.scope) ? body.scope : 'both';
+    const opts = body.options || {};
+    const options = {
+      downloadCount: opts.downloadCount === true,
+      fileDesc: opts.fileDesc !== false,
+      accounts: opts.accounts === true,
+      homeContent: opts.homeContent === true,
+    };
     const mode = body.mode === 'merge' ? 'merge' : 'replace';
-    const data = body.data && body.data.data ? body.data.data : body.data;
+    const payload = body.data && body.data.data ? body.data : { data: body.data };
+    const data = payload.data;
     if (!data || typeof data !== 'object') fail('备份数据格式不正确', 400);
-    if (!data.bcd_files && !data.bcd_admins && !data.bcd_settings) fail('备份数据中缺少必要的数据表', 400);
 
+    const needFiles = scope === 'files' || scope === 'both';
+    const needSettings = scope === 'settings' || scope === 'both';
+    if (needFiles && !Array.isArray(data.bcd_files)) fail('备份数据里没有「文件」数据，请检查导入模式是否选对', 400);
+    if (needSettings && !Array.isArray(data.bcd_settings)) fail('备份数据里没有「设置」数据，请检查导入模式是否选对', 400);
+
+    const HOME_KEYS = ['site_name', 'home_desc', 'home_notice'];
     const tableCols = {
       bcd_settings: ['key', 'value', 'updated_at'],
       bcd_admins: ['id', 'username', 'password_hash', 'salt', 'display_name', 'role', 'status', 'created_by', 'created_at', 'last_login_at'],
       bcd_folders: ['id', 'path', 'name', 'parent', 'share_id', 'created_at'],
-      bcd_files: ['id', 'share_id', 'name', 'folder', 'path', 'ext', 'size_bytes', 'size_text', 'password_hash', 'password_salt', 'download_count', 'created_at', 'updated_at'],
+      bcd_files: ['id', 'share_id', 'name', 'folder', 'path', 'ext', 'size_bytes', 'size_text', 'description', 'password_hash', 'password_salt', 'download_count', 'created_at', 'updated_at'],
       bcd_links: ['id', 'file_id', 'kind', 'url', 'source', 'sort_order'],
       bcd_downloads: ['id', 'file_id', 'link_id', 'kind', 'ip', 'country', 'user_agent', 'created_at'],
       bcd_logs: ['id', 'actor', 'action', 'target', 'detail', 'ip', 'created_at'],
     };
+    const tables = [];
+    if (needFiles) tables.push('bcd_folders', 'bcd_files', 'bcd_links');
+    if (needFiles && options.downloadCount) tables.push('bcd_downloads');
+    if (needSettings) tables.push('bcd_settings');
+    if (needSettings && options.accounts) tables.push('bcd_admins');
+
     const summary = {};
     const statements = [];
-
-    if (mode === 'replace') {
-      for (const t of ['bcd_links', 'bcd_downloads', 'bcd_files', 'bcd_folders', 'bcd_admins', 'bcd_logs']) {
-        statements.push(db(env).prepare(`DELETE FROM ${t}`));
-      }
+    if (mode === 'replace' && needFiles) {
+      statements.push(db(env).prepare('DELETE FROM bcd_links'));
+      statements.push(db(env).prepare('DELETE FROM bcd_files'));
+      statements.push(db(env).prepare('DELETE FROM bcd_folders'));
+      if (options.downloadCount) statements.push(db(env).prepare('DELETE FROM bcd_downloads'));
     }
-    for (const [table, cols] of Object.entries(tableCols)) {
-      const rows = Array.isArray(data[table]) ? data[table] : [];
+    for (const table of tables) {
+      const cols = tableCols[table];
+      let rows = Array.isArray(data[table]) ? data[table] : [];
+      if (table === 'bcd_settings') {
+        rows = rows.filter((r) => r && r.key && r.key !== 'secret_key' && (options.homeContent || !HOME_KEYS.includes(r.key)));
+      }
       let n = 0;
       for (const row of rows) {
+        if (!row || typeof row !== 'object') continue;
         const useCols = cols.filter((c) => row[c] !== undefined && !(table === 'bcd_settings' && c === 'key'));
         if (!useCols.length) continue;
-        const vals = useCols.map((c) => (row[c] === undefined ? null : row[c]));
+        const vals = useCols.map((c) => {
+          if (table === 'bcd_files' && c === 'download_count' && !options.downloadCount) return 0;
+          if (table === 'bcd_files' && c === 'description' && !options.fileDesc) return '';
+          return row[c] === undefined ? null : row[c];
+        });
         const verb = mode === 'merge' ? 'INSERT OR IGNORE' : 'INSERT OR REPLACE';
         statements.push(db(env).prepare(`${verb} INTO ${table}(${useCols.join(',')}) VALUES(${useCols.map(() => '?').join(',')})`).bind(...vals));
         n++;
       }
       summary[table] = n;
     }
-    // 分批执行，避免单次 batch 过大
     for (let i = 0; i < statements.length; i += 60) {
       await db(env).batch(statements.slice(i, i + 60));
     }
-    // 保证设置项补齐 + 当前会话仍然有效
-    const me = await db(env).prepare('SELECT id FROM bcd_admins WHERE username=?').bind(admin.username).first();
-    if (me) await db(env).prepare('UPDATE bcd_sessions SET admin_id=? WHERE token=?').bind(Number(me.id), admin.token).run();
-    await logAction(env, admin.username, 'restore', 'd1', `mode=${mode} ${JSON.stringify(summary)}`, request);
-    return ok({ mode, summary });
+    // 导入账号后保证当前登录会话仍然有效
+    if (tables.includes('bcd_admins')) {
+      const me = await db(env).prepare('SELECT id FROM bcd_admins WHERE username=?').bind(admin.username).first();
+      if (me) await db(env).prepare('UPDATE bcd_sessions SET admin_id=? WHERE token=?').bind(Number(me.id), admin.token).run();
+    }
+    await logAction(env, admin, 'import', scope, `mode=${mode} ${JSON.stringify(options)} ${JSON.stringify(summary)}`, request);
+    return ok({ scope, options, mode, summary });
   }
 
-  /* ---------- 操作日志 ---------- */
+  /* ---------- 操作日志（仅总管理员） ---------- */
   if (path === '/api/admin/logs' && method === 'GET') {
-    await requireAdmin(request, env);
-    const limit = Math.min(200, Math.max(1, parseInt(q.get('limit') || '50', 10) || 50));
+    await requireTotal(request, env);
+    const limit = Math.min(LOG_LIMIT, Math.max(1, parseInt(q.get('limit') || String(LOG_LIMIT), 10) || LOG_LIMIT));
     const res = await db(env).prepare('SELECT * FROM bcd_logs ORDER BY id DESC LIMIT ?').bind(limit).all();
     const total = Number((await db(env).prepare('SELECT COUNT(*) AS c FROM bcd_logs').first()).c);
     return ok({
       total,
+      limit: LOG_LIMIT,
       logs: ((res && res.results) || []).map((r) => ({
         id: Number(r.id),
         actor: r.actor,
@@ -1377,10 +1511,10 @@ async function handleApi(request, env, url) {
 
   // 清空操作日志（清空后会写入一条“清空日志”记录）
   if (path === '/api/admin/logs' && method === 'DELETE') {
-    const admin = await requireAdmin(request, env);
+    const admin = await requireTotal(request, env);
     const before = Number((await db(env).prepare('SELECT COUNT(*) AS c FROM bcd_logs').first()).c);
     await db(env).prepare('DELETE FROM bcd_logs').run();
-    await logAction(env, admin.username, 'clear_logs', '日志', `清空 ${before} 条操作日志`, request);
+    await logAction(env, admin, 'clear_logs', '日志', `清空 ${before} 条操作日志`, request);
     return ok({ removed: before });
   }
 
@@ -1431,6 +1565,13 @@ async function validateFilePayload(body, opts) {
   const sizeV = validateSize(body.size);
   if (sizeV.error) fields.size = sizeV.error;
 
+  let description = current ? current.description || '' : '';
+  if (body.description !== undefined) {
+    const d = String(body.description);
+    if ([...d].length > 2000) fields.description = '文件简介不能超过 2000 个字符';
+    else description = d.trim();
+  }
+
   let passwordHash = current ? current.password_hash : null;
   let passwordSalt = current ? current.password_salt : null;
   const action = body.passwordAction || (body.password === undefined ? 'keep' : 'set');
@@ -1460,6 +1601,7 @@ async function validateFilePayload(body, opts) {
       ext: fileExt(nameV.value),
       sizeBytes: sizeV.value.bytes,
       sizeText: sizeV.value.text,
+      description,
       links: linksV.value,
       passwordHash,
       passwordSalt,

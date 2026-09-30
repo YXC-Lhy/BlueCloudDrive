@@ -82,10 +82,12 @@
 
     el.btnUp.disabled = !data.parent;
     el.searchBox.style.display = data.allowSearch ? '' : 'none';
-    el.btnNewFolder.style.display = site.isAdmin ? '' : 'none';
-    el.badge.textContent = site.isAdmin ? '管理员模式 · 可编辑 / 删除' : '访客模式 · 仅可浏览下载';
-    el.badge.className = 'badge ' + (site.isAdmin ? 'primary' : '');
-    el.sub.textContent = site.isAdmin ? '右键文件或文件夹进行编辑、删除、获取分享链接等操作' : '右键文件可下载 / 复制分享链接';
+    el.btnNewFolder.style.display = data.isAdmin ? '' : 'none';
+    el.badge.textContent = data.isAdmin ? '管理员模式 · 可编辑 / 删除' : data.isUser ? '用户模式 · 可浏览下载' : '访客模式 · 仅可浏览下载';
+    el.badge.className = 'badge ' + (data.isAdmin ? 'primary' : data.isUser ? 'warn' : '');
+    el.sub.textContent = data.isAdmin
+      ? '右键文件或文件夹进行编辑、删除、获取分享链接等操作'
+      : '右键文件可下载 / 复制分享链接';
     el.btnView.textContent = state.view === 'grid' ? '列表视图' : '图标视图';
 
     const folders = data.folders || [];
@@ -366,10 +368,10 @@
   /* ------------------------------ 启动 ------------------------------ */
   (async function init() {
     site = await BCD.boot({ active: 'files', title: '所有文件' });
-    state.path = site.isAdmin ? '/' : site.guestRoot || '/文件分享';
+    state.path = site.isAdmin ? '/' : site.isUser ? site.userRoot || '/文件分享' : site.guestRoot || '/文件分享';
     el.sortSelect.value = state.sort + ':' + state.order;
     el.searchInput.value = state.search;
-    if (!site.guestBrowse && !site.isAdmin) {
+    if (!site.isAdmin && !site.isUser && !site.guestBrowse) {
       renderError(new Error('管理员尚未开放文件浏览功能'));
       return;
     }

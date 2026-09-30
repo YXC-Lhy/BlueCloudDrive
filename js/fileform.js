@@ -92,6 +92,13 @@
       </div>
 
       <div class="form-row">
+        <label>文件简介（支持 Markdown）</label>
+        <textarea class="input" name="description" rows="4" placeholder="留空则不显示；支持 **粗体**、[链接](https://example.com)、- 列表 等 Markdown 语法">${esc(file ? file.description || '' : '')}</textarea>
+        <div class="hint">默认为空；填写后会在该文件的分享界面展示，最多 2000 个字符</div>
+        <div class="field-error" data-err="description"></div>
+      </div>
+
+      <div class="form-row">
         <label>下载密码</label>
         ${
           isEdit
@@ -204,6 +211,7 @@
             const payload = {
               name: body.querySelector('[name=name]').value.trim(),
               folder: body.querySelector('[name=folder]').value.trim(),
+              description: body.querySelector('[name=description]').value,
               links: links.map((l) => ({ kind: l.kind, url: String(l.url || '').trim(), source: l.kind === 'external' ? String(l.source || '').trim() : '' })),
               size: sizeUnit.value === 'unknown' ? { mode: 'unknown' } : { mode: 'custom', value: sizeValue.value.trim(), unit: sizeUnit.value },
             };
@@ -229,6 +237,7 @@
             if (payload.size.mode === 'custom' && Number(payload.size.value) <= 0) fe.size = '文件大小必须大于 0';
             if (payload.passwordAction === 'set' && !payload.password) fe.password = '请输入下载密码';
             if (payload.password && [...payload.password].length > 10) fe.password = '下载密码最长 10 个字符';
+            if ([...payload.description].length > 2000) fe.description = '文件简介不能超过 2000 个字符';
             if (Object.keys(fe).length) {
               BCD.applyFieldErrors(body, fe);
               return;
